@@ -64,8 +64,12 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
     // Listen for scan results
     FlutterBluePlus.scanResults.listen((results) {
       setState(() {
-        // Remove duplicates and update the list
-        _devices = results.map((r) => r.device).toSet().toList();
+        // Filter devices with names and remove duplicates
+        _devices = results
+            .where((r) => r.device.platformName.isNotEmpty)
+            .map((r) => r.device)
+            .toSet()
+            .toList();
       });
     });
 
@@ -108,6 +112,52 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
     }
   }
 
+  Future<void> _refreshDeviceList() async {
+    if (_isScanning) {
+      await _stopScan();
+    }
+    await _startScan();
+  }
+
+  void _showDeviceDetails(BluetoothDevice device) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Device Details',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 16),
+              Text('Name: ${device.platformName}'),
+              Text('ID: ${device.remoteId.str}'),
+              FutureBuilder<int?>(
+                future: device.mtu.first,
+                builder: (context, snapshot) {
+                  if (snapshot.hasData) {
+                    return Text('MTU: ${snapshot.data}');
+                  } else {
+                    return const Text('MTU: Unknown');
+                  }
+                },
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -116,8 +166,14 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _refreshDeviceList,
+            tooltip: 'Refresh list',
+          ),
+          IconButton(
             icon: Icon(_isScanning ? Icons.stop : Icons.search),
             onPressed: _isScanning ? _stopScan : _startScan,
+            tooltip: _isScanning ? 'Stop scan' : 'Start scan',
           ),
         ],
       ),
@@ -168,17 +224,11 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
         final device = _devices[index];
         return ListTile(
           leading: const Icon(Icons.bluetooth),
-          title: Text(
-            device.platformName.isEmpty
-                ? 'Unknown Device'
-                : device.platformName,
-          ),
+          title: Text(device.platformName),
           subtitle: Text(device.remoteId.str),
           trailing: IconButton(
-            icon: const Icon(Icons.info),
-            onPressed: () {
-              // You can add navigation to device details here
-            },
+            icon: const Icon(Icons.info_outline),
+            onPressed: () => _showDeviceDetails(device),
           ),
         );
       },
