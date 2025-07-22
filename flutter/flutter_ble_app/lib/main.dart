@@ -29,9 +29,13 @@ class BleDeviceListScreen extends StatefulWidget {
 }
 
 class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
-  List<BluetoothDevice> _devices = [];
+  List<ScanResult> _scanResults = [];
   bool _isScanning = false;
   bool _hasPermissions = false;
+  BluetoothDevice? _connectedDevice;
+  String _message = "No conectado";
+  bool _isConnected = false;
+  BluetoothCharacteristic? _messageCharacteristic;
 
   @override
   void initState() {
@@ -49,31 +53,24 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
 
     bool allGranted = statuses.values.every((status) => status.isGranted);
 
-    if (allGranted) {
-      setState(() {
-        _hasPermissions = true;
-      });
-    } else {
+    setState(() {
+      _hasPermissions = allGranted;
+    });
+
+    if (!allGranted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Permissions not granted')));
+      ).showSnackBar(const SnackBar(content: Text('Permisos no concedidos')));
     }
   }
 
   void _setupBluetoothListeners() {
-    // Listen for scan results
     FlutterBluePlus.scanResults.listen((results) {
       setState(() {
-        // Filter devices with names and remove duplicates
-        _devices = results
-            .where((r) => r.device.platformName.isNotEmpty)
-            .map((r) => r.device)
-            .toSet()
-            .toList();
+        _scanResults = results;
       });
     });
 
-    // Listen for scan state changes
     FlutterBluePlus.isScanning.listen((isScanning) {
       setState(() {
         _isScanning = isScanning;
@@ -88,17 +85,17 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
     }
 
     try {
-      // Clear previous results
       setState(() {
-        _devices = [];
+        _scanResults = [];
       });
-
-      // Start scan with timeout
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 15),
+        androidUsesFineLocation: false,
+      );
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error starting scan: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error al escanear: $e')));
     }
   }
 
@@ -108,18 +105,101 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
     } catch (e) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error stopping scan: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error al detener escaneo: $e')));
     }
   }
 
-  Future<void> _refreshDeviceList() async {
-    if (_isScanning) {
-      await _stopScan();
+  Future<void> _connectToDevice(BluetoothDevice device) async {
+    try {
+      setState(() {
+        _message = "Conectando...";
+        _isConnected = false;
+      });
+
+      // Cancelar conexión previa si existe
+      if (_connectedDevice != null) {
+        await _connectedDevice!.disconnect();
+      }
+
+      // Conectar al dispositivo
+      await device.connect(autoConnect: false);
+      setState(() {
+        _connectedDevice = device;
+        _message = "Buscando servicios...";
+      });
+
+      // Descubrir servicios
+      List<BluetoothService> services = await device.discoverServices();
+
+      // UUIDs del servicio y característica (debe coincidir con el ESP32)
+      const serviceUuid = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+      const characteristicUuid = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+
+      for (var service in services) {
+        if (service.uuid.toString().toLowerCase() == serviceUuid) {
+          for (var characteristic in service.characteristics) {
+            if (characteristic.uuid.toString().toLowerCase() ==
+                characteristicUuid) {
+              _messageCharacteristic = characteristic;
+
+              // Leer el valor inicial
+              List<int> value = await characteristic.read();
+              setState(() {
+                _message = String.fromCharCodes(value);
+                _isConnected = true;
+              });
+
+              // Configurar notificaciones para recibir actualizaciones
+              await characteristic.setNotifyValue(true);
+              characteristic.value.listen((value) {
+                if (value.isNotEmpty) {
+                  setState(() {
+                    _message = String.fromCharCodes(value);
+                  });
+                }
+              });
+
+              return;
+            }
+          }
+        }
+      }
+
+      setState(() {
+        _message = "No se encontró la característica del mensaje";
+      });
+    } catch (e) {
+      setState(() {
+        _message = "Error: $e";
+        _isConnected = false;
+      });
+      if (_connectedDevice != null) {
+        await _connectedDevice!.disconnect();
+        _connectedDevice = null;
+      }
     }
-    await _startScan();
   }
 
-  void _showDeviceDetails(BluetoothDevice device) {
+  Future<void> _disconnectDevice() async {
+    if (_connectedDevice != null) {
+      try {
+        await _connectedDevice!.disconnect();
+        setState(() {
+          _message = "Desconectado";
+          _isConnected = false;
+          _connectedDevice = null;
+          _messageCharacteristic = null;
+        });
+      } catch (e) {
+        setState(() {
+          _message = "Error al desconectar: $e";
+        });
+      }
+    }
+  }
+
+  void _showDeviceDetails(ScanResult result) {
+    final device = result.device;
     showModalBottomSheet(
       context: context,
       builder: (context) {
@@ -130,27 +210,37 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'Device Details',
+                'Detalles del dispositivo',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 16),
-              Text('Name: ${device.platformName}'),
+              Text('Nombre: ${device.platformName}'),
               Text('ID: ${device.remoteId.str}'),
-              FutureBuilder<int?>(
-                future: device.mtu.first,
-                builder: (context, snapshot) {
-                  if (snapshot.hasData) {
-                    return Text('MTU: ${snapshot.data}');
-                  } else {
-                    return const Text('MTU: Unknown');
-                  }
-                },
-              ),
+              Text('RSSI: ${result.rssi}'),
               const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Close'),
-              ),
+              if (_connectedDevice?.remoteId == device.remoteId && _isConnected)
+                Column(
+                  children: [
+                    Text('Mensaje del ESP32: $_message'),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: _disconnectDevice,
+                      child: const Text('Desconectar'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ],
+                )
+              else
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _connectToDevice(device);
+                  },
+                  child: const Text('Conectar y leer mensaje'),
+                ),
             ],
           ),
         );
@@ -162,18 +252,18 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('BLE Devices'),
+        title: const Text('Dispositivos BLE'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _refreshDeviceList,
-            tooltip: 'Refresh list',
+            onPressed: _startScan,
+            tooltip: 'Refrescar lista',
           ),
           IconButton(
             icon: Icon(_isScanning ? Icons.stop : Icons.search),
             onPressed: _isScanning ? _stopScan : _startScan,
-            tooltip: _isScanning ? 'Stop scan' : 'Start scan',
+            tooltip: _isScanning ? 'Detener escaneo' : 'Iniciar escaneo',
           ),
         ],
       ),
@@ -187,17 +277,17 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Text('Location permission required for BLE scanning'),
+            const Text('Se requieren permisos para escanear dispositivos BLE'),
             ElevatedButton(
               onPressed: _checkPermissions,
-              child: const Text('Request Permission'),
+              child: const Text('Solicitar permisos'),
             ),
           ],
         ),
       );
     }
 
-    if (_devices.isEmpty) {
+    if (_scanResults.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -205,13 +295,15 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
             Icon(Icons.bluetooth, size: 64, color: Colors.grey[400]),
             const SizedBox(height: 16),
             Text(
-              _isScanning ? 'Scanning for devices...' : 'No devices found',
+              _isScanning
+                  ? 'Escaneando dispositivos...'
+                  : 'No se encontraron dispositivos',
               style: TextStyle(color: Colors.grey[600]),
             ),
             if (!_isScanning)
               ElevatedButton(
                 onPressed: _startScan,
-                child: const Text('Start Scan'),
+                child: const Text('Iniciar escaneo'),
               ),
           ],
         ),
@@ -219,16 +311,42 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
     }
 
     return ListView.builder(
-      itemCount: _devices.length,
+      itemCount: _scanResults.length,
       itemBuilder: (context, index) {
-        final device = _devices[index];
-        return ListTile(
-          leading: const Icon(Icons.bluetooth),
-          title: Text(device.platformName),
-          subtitle: Text(device.remoteId.str),
-          trailing: IconButton(
-            icon: const Icon(Icons.info_outline),
-            onPressed: () => _showDeviceDetails(device),
+        final result = _scanResults[index];
+        final device = result.device;
+        final isConnected =
+            _connectedDevice?.remoteId == device.remoteId && _isConnected;
+
+        return Card(
+          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+          child: ListTile(
+            leading: Icon(
+              Icons.bluetooth,
+              color: isConnected ? Colors.blue : Colors.grey,
+            ),
+            title: Text(
+              device.platformName.isNotEmpty
+                  ? device.platformName
+                  : 'Dispositivo desconocido',
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(device.remoteId.str),
+                Text('RSSI: ${result.rssi}'),
+                if (isConnected)
+                  Text(
+                    'Mensaje: $_message',
+                    style: const TextStyle(color: Colors.green),
+                  ),
+              ],
+            ),
+            trailing: IconButton(
+              icon: const Icon(Icons.info_outline),
+              onPressed: () => _showDeviceDetails(result),
+            ),
+            onTap: () => _showDeviceDetails(result),
           ),
         );
       },
