@@ -224,7 +224,14 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
                     Text('Mensaje del ESP32: $_message'),
                     const SizedBox(height: 16),
                     ElevatedButton(
-                      onPressed: _disconnectDevice,
+                      onPressed: () async {
+                        await _disconnectDevice(); // Agregar paréntesis y await
+                        if (mounted) {
+                          Navigator.pop(
+                            context,
+                          ); // Cerrar después de desconectar
+                        }
+                      },
                       child: const Text('Desconectar'),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.red,
