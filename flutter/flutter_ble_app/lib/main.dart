@@ -67,7 +67,9 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
   void _setupBluetoothListeners() {
     FlutterBluePlus.scanResults.listen((results) {
       setState(() {
-        _scanResults = results;
+        _scanResults = results
+            .where((result) => result.device.platformName.startsWith('ESP32'))
+            .toList();
       });
     });
 
