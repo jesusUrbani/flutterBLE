@@ -13,10 +13,14 @@ class _TestScreenState extends State<TestScreen> {
   double _saldo = 100.0;
   BluetoothDevice? _connectedDevice;
   String _bleName = "No conectado";
-  String _bleMessage = "Esperando dispositivo...";
+  String _bleMessage = "Escaneando dispositivos...";
   bool _isConnected = false;
   BluetoothCharacteristic? _messageCharacteristic;
   bool _showDialog = false;
+  bool _count = true;
+  bool _isWaitingToReconnect = false;
+  int? _currentRssi;
+  final double _maxDistanceRssi = -60;
 
   @override
   void initState() {
@@ -38,25 +42,41 @@ class _TestScreenState extends State<TestScreen> {
   }
 
   void _startAutoScan() {
+    if (_isWaitingToReconnect || _isConnected) return;
+
     FlutterBluePlus.stopScan();
 
+    ScanResult? strongestDevice;
+
     FlutterBluePlus.scanResults.listen((results) {
+      if (_isConnected || _isWaitingToReconnect || !mounted) return;
+
       for (var result in results) {
-        if (result.device.platformName.startsWith('ESP32') && !_isConnected) {
-          _connectToDevice(result.device);
-          break;
+        if (result.device.platformName.startsWith('ESP32') &&
+            result.rssi > _maxDistanceRssi) {
+          if (strongestDevice == null || result.rssi > strongestDevice!.rssi) {
+            strongestDevice = result;
+          }
         }
+      }
+
+      if (strongestDevice != null) {
+        final nonNullDevice = strongestDevice!;
+        _connectToDevice(nonNullDevice.device, nonNullDevice.rssi);
       }
     });
 
     FlutterBluePlus.startScan(timeout: const Duration(seconds: 30));
   }
 
-  Future<void> _connectToDevice(BluetoothDevice device) async {
+  Future<void> _connectToDevice(BluetoothDevice device, int rssi) async {
     try {
       setState(() {
+        _connectedDevice = device;
         _bleName = device.platformName;
-        _bleMessage = "Conectando...";
+        _bleMessage = "Conectando... (RSSI: $rssi)";
+        _isConnected = true;
+        _currentRssi = rssi;
       });
 
       await device.connect(autoConnect: false);
@@ -75,17 +95,18 @@ class _TestScreenState extends State<TestScreen> {
 
               await characteristic.setNotifyValue(true);
               characteristic.value.listen((value) {
-                if (value.isNotEmpty) {
+                if (value.isNotEmpty && mounted) {
                   final message = String.fromCharCodes(value);
-                  setState(() => _bleMessage = message);
+                  setState(() {
+                    _bleMessage = "Mensaje: $message (RSSI: $_currentRssi)";
+                  });
                   _triggerGateProcess();
                 }
               });
 
               setState(() {
-                _isConnected = true;
-                _connectedDevice = device;
-                _bleMessage = "Conectado. Esperando mensajes...";
+                _bleMessage =
+                    "Conectado. Esperando mensajes... (RSSI: $_currentRssi)";
               });
               return;
             }
@@ -93,21 +114,22 @@ class _TestScreenState extends State<TestScreen> {
         }
       }
 
-      // Si llega aquí es que no encontró la característica
       setState(() {
         _bleMessage = "Característica no encontrada";
       });
-      _disconnectDevice();
+      _scheduleReconnection();
     } catch (e) {
-      setState(() {
-        _bleMessage = "Error: ${e.toString()}";
-      });
-      _disconnectDevice();
+      if (mounted) {
+        setState(() {
+          _bleMessage = "Error: ${e.toString()}";
+        });
+      }
+      _scheduleReconnection();
     }
   }
 
   void _triggerGateProcess() {
-    if (!_showDialog && mounted) {
+    if (!_showDialog && mounted && _count) {
       _showDialog = true;
       _showGateDialog();
     }
@@ -123,6 +145,8 @@ class _TestScreenState extends State<TestScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text('Mensaje recibido: $_bleMessage'),
+            const SizedBox(height: 10),
+            Text('Fuerza señal: $_currentRssi dBm'),
             const SizedBox(height: 20),
             const Text('¿Abrir compuerta? (\$5.00)'),
           ],
@@ -133,23 +157,24 @@ class _TestScreenState extends State<TestScreen> {
             child: const Text('Cancelar'),
           ),
           TextButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => {Navigator.pop(context, true), _count = false},
             child: const Text('Abrir'),
           ),
         ],
       ),
     );
 
-    if (openGate == true && mounted) {
-      await _processGateOpening();
-    }
-
     if (mounted) {
       setState(() {
         _showDialog = false;
       });
     }
-    _disconnectDevice();
+
+    if (openGate == true && mounted) {
+      await _processGateOpening();
+    }
+
+    _scheduleReconnection();
   }
 
   Future<void> _processGateOpening() async {
@@ -179,21 +204,57 @@ class _TestScreenState extends State<TestScreen> {
     }
   }
 
+  void _scheduleReconnection() async {
+    if (_isWaitingToReconnect || !mounted) return;
+
+    try {
+      setState(() {
+        _isWaitingToReconnect = true;
+        _isConnected = false;
+        _bleMessage = "Esperando 5 segundos para nueva conexión...";
+      });
+
+      await _disconnectDevice();
+      _count = false; // Evita reconexiones múltiples
+
+      await Future.delayed(const Duration(seconds: 5));
+
+      _count = true; // Permite reconexiones nuevamente
+
+      if (!mounted) return;
+
+      setState(() {
+        _isWaitingToReconnect = false;
+        _bleMessage = "Buscando dispositivo más cercano...";
+        _currentRssi = null;
+      });
+
+      _startAutoScan();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isWaitingToReconnect = false;
+        _bleMessage = "Error al reconectar: $e";
+      });
+      _startAutoScan();
+    }
+  }
+
   Future<void> _disconnectDevice() async {
     if (_connectedDevice != null) {
       try {
-        await _connectedDevice!.disconnect();
+        await _connectedDevice!.disconnect().timeout(
+          const Duration(seconds: 2),
+        );
       } catch (e) {
         debugPrint("Error al desconectar: $e");
       } finally {
         if (mounted) {
           setState(() {
-            _isConnected = false;
             _connectedDevice = null;
-            _bleMessage = "Desconectado. Escaneando...";
+            _messageCharacteristic = null;
           });
         }
-        _startAutoScan();
       }
     }
   }
@@ -209,7 +270,7 @@ class _TestScreenState extends State<TestScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Prueba BLE'),
+        title: const Text('Control de Compuerta BLE - 1 metro'),
         backgroundColor: Colors.blueGrey,
       ),
       body: Center(
@@ -220,19 +281,53 @@ class _TestScreenState extends State<TestScreen> {
               'Saldo: \$${_saldo.toStringAsFixed(2)}',
               style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 40),
-            Text(_bleName, style: const TextStyle(fontSize: 20)),
-            const SizedBox(height: 10),
+            const SizedBox(height: 30),
+            Text(
+              _bleName,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 15),
             Text(
               _bleMessage,
               style: TextStyle(
-                color: _isConnected ? Colors.green : Colors.grey,
+                color: _isConnected
+                    ? Colors.green
+                    : _isWaitingToReconnect
+                    ? Colors.orange
+                    : Colors.grey,
                 fontSize: 18,
               ),
+              textAlign: TextAlign.center,
             ),
+            if (_currentRssi != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Fuerza de señal: $_currentRssi dBm',
+                style: TextStyle(
+                  color: _getRssiColor(_currentRssi!),
+                  fontSize: 16,
+                ),
+              ),
+            ],
+            if (_isWaitingToReconnect) ...[
+              const SizedBox(height: 20),
+              const CircularProgressIndicator(),
+              const SizedBox(height: 10),
+              const Text(
+                'Preparando nueva conexión...',
+                style: TextStyle(color: Colors.orange),
+              ),
+            ],
           ],
         ),
       ),
     );
+  }
+
+  Color _getRssiColor(int rssi) {
+    if (rssi > -50) return Colors.green;
+    if (rssi > -60) return Colors.lightGreen;
+    if (rssi > -70) return Colors.yellow;
+    return Colors.red;
   }
 }
