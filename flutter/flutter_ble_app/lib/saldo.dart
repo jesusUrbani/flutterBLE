@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -20,12 +21,24 @@ class _TestScreenState extends State<TestScreen> {
   bool _count = true;
   bool _isWaitingToReconnect = false;
   int? _currentRssi;
-  final double _maxDistanceRssi = -43;
+  final List<double> _rssiThresholds = [-43, -50, -60, -70, -80];
+  int _currentThresholdIndex = 0;
+  Timer? _scanTimer;
+  StreamSubscription<List<ScanResult>>? _scanSubscription;
 
   @override
   void initState() {
     super.initState();
     _initBluetooth();
+  }
+
+  @override
+  void dispose() {
+    _scanTimer?.cancel();
+    _scanSubscription?.cancel();
+    FlutterBluePlus.stopScan();
+    _connectedDevice?.disconnect();
+    super.dispose();
   }
 
   Future<void> _initBluetooth() async {
@@ -45,32 +58,78 @@ class _TestScreenState extends State<TestScreen> {
     if (_isWaitingToReconnect || _isConnected) return;
 
     FlutterBluePlus.stopScan();
+    _currentThresholdIndex = 0;
+    _scanTimer?.cancel();
+    _scanSubscription?.cancel();
+
+    setState(() {
+      _bleMessage = "Buscando dispositivos cercanos...";
+      _currentRssi = null;
+    });
+
+    _scanWithCurrentThreshold();
+  }
+
+  void _scanWithCurrentThreshold() {
+    if (_currentThresholdIndex >= _rssiThresholds.length) {
+      _currentThresholdIndex = 0;
+    }
+
+    final currentThreshold = _rssiThresholds[_currentThresholdIndex];
+
+    setState(() {
+      _bleMessage =
+          "Buscando (RSSI > ${currentThreshold.toStringAsFixed(0)} dBm)...";
+    });
 
     ScanResult? strongestDevice;
+    bool deviceFound = false;
 
-    FlutterBluePlus.scanResults.listen((results) {
+    _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
       if (_isConnected || _isWaitingToReconnect || !mounted) return;
 
       for (var result in results) {
         if (result.device.platformName.startsWith('ESP32') &&
-            result.rssi > _maxDistanceRssi) {
+            result.rssi > currentThreshold) {
           if (strongestDevice == null || result.rssi > strongestDevice!.rssi) {
             strongestDevice = result;
           }
         }
       }
 
-      if (strongestDevice != null) {
+      if (strongestDevice != null && !deviceFound) {
+        deviceFound = true;
         final nonNullDevice = strongestDevice!;
         _connectToDevice(nonNullDevice.device, nonNullDevice.rssi);
       }
     });
 
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 30));
+    FlutterBluePlus.startScan(timeout: const Duration(seconds: 8));
+
+    _scanTimer = Timer(const Duration(seconds: 8), () {
+      if (!deviceFound && !_isConnected && mounted) {
+        _currentThresholdIndex++;
+        if (_currentThresholdIndex < _rssiThresholds.length) {
+          _scanWithCurrentThreshold();
+        } else {
+          setState(() {
+            _bleMessage =
+                "No se encontraron dispositivos. Reiniciando búsqueda...";
+          });
+          Timer(const Duration(seconds: 2), () {
+            _currentThresholdIndex = 0;
+            _scanWithCurrentThreshold();
+          });
+        }
+      }
+    });
   }
 
   Future<void> _connectToDevice(BluetoothDevice device, int rssi) async {
     try {
+      _scanTimer?.cancel();
+      _scanSubscription?.cancel();
+
       setState(() {
         _connectedDevice = device;
         _bleName = device.platformName;
@@ -212,7 +271,6 @@ class _TestScreenState extends State<TestScreen> {
         _isWaitingToReconnect = true;
         _isConnected = false;
         _bleMessage = "Esperando 5 segundos para nueva conexión...";
-        // Resetear el nombre del dispositivo al iniciar reconexión
         _bleName = "Buscando dispositivo...";
       });
 
@@ -229,12 +287,9 @@ class _TestScreenState extends State<TestScreen> {
         _isWaitingToReconnect = false;
         _bleMessage = "Buscando dispositivo más cercano...";
         _currentRssi = null;
-        // Asegurarse de que el nombre se resetee completamente
         _bleName = "No conectado";
       });
 
-      // Forzar un nuevo escaneo completo
-      FlutterBluePlus.stopScan();
       _startAutoScan();
     } catch (e) {
       if (!mounted) return;
@@ -243,7 +298,6 @@ class _TestScreenState extends State<TestScreen> {
         _bleMessage = "Error al reconectar: $e";
         _bleName = "Error de conexión";
       });
-      FlutterBluePlus.stopScan();
       _startAutoScan();
     }
   }
@@ -268,17 +322,10 @@ class _TestScreenState extends State<TestScreen> {
   }
 
   @override
-  void dispose() {
-    FlutterBluePlus.stopScan();
-    _connectedDevice?.disconnect();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Control de Compuerta BLE - 1 metro'),
+        title: const Text('Control de Compuerta BLE - Búsqueda Inteligente'),
         backgroundColor: Colors.blueGrey,
       ),
       body: Center(
