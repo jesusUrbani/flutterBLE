@@ -2,84 +2,64 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-class SaldoScreen extends StatefulWidget {
-  const SaldoScreen({super.key});
+class TestScreen extends StatefulWidget {
+  const TestScreen({super.key});
 
   @override
-  State<SaldoScreen> createState() => _SaldoScreenState();
+  State<TestScreen> createState() => _TestScreenState();
 }
 
-class _SaldoScreenState extends State<SaldoScreen> {
-  double _saldo = 100.0; // Saldo inicial
-  bool _isScanning = false;
-  bool _hasPermissions = false;
+class _TestScreenState extends State<TestScreen> {
+  double _saldo = 100.0;
   BluetoothDevice? _connectedDevice;
-  String _message = "No conectado";
+  String _bleName = "No conectado";
+  String _bleMessage = "Esperando dispositivo...";
   bool _isConnected = false;
   BluetoothCharacteristic? _messageCharacteristic;
+  bool _showDialog = false;
 
   @override
   void initState() {
     super.initState();
-    _checkPermissions();
-    _setupBluetoothListeners();
+    _initBluetooth();
   }
 
-  Future<void> _checkPermissions() async {
-    Map<Permission, PermissionStatus> statuses = await [
+  Future<void> _initBluetooth() async {
+    await _requestPermissions();
+    _startAutoScan();
+  }
+
+  Future<void> _requestPermissions() async {
+    await [
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.location,
     ].request();
-
-    bool allGranted = statuses.values.every((status) => status.isGranted);
-
-    setState(() {
-      _hasPermissions = allGranted;
-    });
-
-    if (!allGranted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Permisos no concedidos')));
-    }
   }
 
-  void _setupBluetoothListeners() {
+  void _startAutoScan() {
+    FlutterBluePlus.stopScan();
+
     FlutterBluePlus.scanResults.listen((results) {
       for (var result in results) {
-        // Filtrar dispositivos ESP32 a menos de 2 metros (RSSI mayor a -60 aprox)
-        if (result.device.platformName.startsWith('ESP32') &&
-            result.rssi > -60) {
-          _connectAndHandleDevice(result.device);
-          break; // Conectarse solo al primero que cumpla las condiciones
+        if (result.device.platformName.startsWith('ESP32') && !_isConnected) {
+          _connectToDevice(result.device);
+          break;
         }
       }
     });
 
-    FlutterBluePlus.isScanning.listen((isScanning) {
-      setState(() {
-        _isScanning = isScanning;
-      });
-    });
+    FlutterBluePlus.startScan(timeout: const Duration(seconds: 30));
   }
 
-  Future<void> _connectAndHandleDevice(BluetoothDevice device) async {
+  Future<void> _connectToDevice(BluetoothDevice device) async {
     try {
       setState(() {
-        _message = "Conectando...";
-        _isConnected = false;
+        _bleName = device.platformName;
+        _bleMessage = "Conectando...";
       });
-
-      if (_connectedDevice != null) {
-        await _connectedDevice!.disconnect();
-      }
 
       await device.connect(autoConnect: false);
-      setState(() {
-        _connectedDevice = device;
-        _message = "Buscando servicios...";
-      });
 
       List<BluetoothService> services = await device.discoverServices();
 
@@ -93,55 +73,59 @@ class _SaldoScreenState extends State<SaldoScreen> {
                 characteristicUuid) {
               _messageCharacteristic = characteristic;
 
-              List<int> value = await characteristic.read();
-              setState(() {
-                _message = String.fromCharCodes(value);
-                _isConnected = true;
-              });
-
               await characteristic.setNotifyValue(true);
               characteristic.value.listen((value) {
                 if (value.isNotEmpty) {
                   final message = String.fromCharCodes(value);
-                  setState(() {
-                    _message = message;
-                  });
-
-                  // Si el mensaje indica que la compuerta está lista
-                  if (message.contains("compuerta_lista")) {
-                    _mostrarDialogoCompuerta();
-                  }
+                  setState(() => _bleMessage = message);
+                  _triggerGateProcess();
                 }
               });
 
+              setState(() {
+                _isConnected = true;
+                _connectedDevice = device;
+                _bleMessage = "Conectado. Esperando mensajes...";
+              });
               return;
             }
           }
         }
       }
 
+      // Si llega aquí es que no encontró la característica
       setState(() {
-        _message = "No se encontró la característica del mensaje";
+        _bleMessage = "Característica no encontrada";
       });
+      _disconnectDevice();
     } catch (e) {
       setState(() {
-        _message = "Error: $e";
-        _isConnected = false;
+        _bleMessage = "Error: ${e.toString()}";
       });
-      if (_connectedDevice != null) {
-        await _connectedDevice!.disconnect();
-        _connectedDevice = null;
-      }
+      _disconnectDevice();
     }
   }
 
-  Future<void> _mostrarDialogoCompuerta() async {
-    bool? abrir = await showDialog<bool>(
+  void _triggerGateProcess() {
+    if (!_showDialog && mounted) {
+      _showDialog = true;
+      _showGateDialog();
+    }
+  }
+
+  Future<void> _showGateDialog() async {
+    bool? openGate = await showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: const Text('Compuerta detectada'),
-        content: const Text(
-          '¿Deseas abrir la compuerta? Se descontará \$5 de tu saldo.',
+        title: Text('Dispositivo: $_bleName'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('Mensaje recibido: $_bleMessage'),
+            const SizedBox(height: 20),
+            const Text('¿Abrir compuerta? (\$5.00)'),
+          ],
         ),
         actions: [
           TextButton(
@@ -156,81 +140,94 @@ class _SaldoScreenState extends State<SaldoScreen> {
       ),
     );
 
-    if (abrir == true) {
-      // Enviar comando para abrir compuerta
-      if (_messageCharacteristic != null) {
-        await _messageCharacteristic!.write("abrir_compuerta".codeUnits);
-      }
+    if (openGate == true && mounted) {
+      await _processGateOpening();
+    }
 
-      // Actualizar saldo
+    if (mounted) {
+      setState(() {
+        _showDialog = false;
+      });
+    }
+    _disconnectDevice();
+  }
+
+  Future<void> _processGateOpening() async {
+    if (_messageCharacteristic != null) {
+      await _messageCharacteristic!.write("abrir".codeUnits);
+    }
+
+    if (mounted) {
       setState(() {
         _saldo -= 5.0;
+        _bleMessage = "Procesando apertura...";
       });
 
-      // Mostrar confirmación
-      if (mounted) {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Compuerta abierta'),
-            content: const Text('La compuerta se ha abierto correctamente.'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Aceptar'),
-              ),
-            ],
-          ),
-        );
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Compuerta abierta'),
+          content: const Text('Se ha descontado \$5.00 de tu saldo'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  Future<void> _disconnectDevice() async {
+    if (_connectedDevice != null) {
+      try {
+        await _connectedDevice!.disconnect();
+      } catch (e) {
+        debugPrint("Error al desconectar: $e");
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isConnected = false;
+            _connectedDevice = null;
+            _bleMessage = "Desconectado. Escaneando...";
+          });
+        }
+        _startAutoScan();
       }
     }
   }
 
-  Future<void> _startScan() async {
-    if (!_hasPermissions) {
-      await _checkPermissions();
-      if (!_hasPermissions) return;
-    }
-
-    try {
-      await FlutterBluePlus.startScan(
-        timeout: const Duration(seconds: 15),
-        androidUsesFineLocation: false,
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error al escanear: $e')));
-    }
+  @override
+  void dispose() {
+    FlutterBluePlus.stopScan();
+    _connectedDevice?.disconnect();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Control de Saldo'),
+        title: const Text('Prueba BLE'),
         backgroundColor: Colors.blueGrey,
       ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Text('Tu saldo actual es:', style: TextStyle(fontSize: 24)),
-            const SizedBox(height: 20),
             Text(
-              '\$${_saldo.toStringAsFixed(2)}',
-              style: const TextStyle(fontSize: 48, fontWeight: FontWeight.bold),
+              'Saldo: \$${_saldo.toStringAsFixed(2)}',
+              style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 40),
-            ElevatedButton(
-              onPressed: _startScan,
-              child: const Text('Buscar dispositivos cercanos'),
-            ),
-            const SizedBox(height: 20),
+            Text(_bleName, style: const TextStyle(fontSize: 20)),
+            const SizedBox(height: 10),
             Text(
-              _isConnected ? 'Conectado: $_message' : _message,
+              _bleMessage,
               style: TextStyle(
                 color: _isConnected ? Colors.green : Colors.grey,
+                fontSize: 18,
               ),
             ),
           ],

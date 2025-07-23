@@ -18,7 +18,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: const SaldoScreen(), // Usa EmptyScreen como pantalla inicial
+      home: const TestScreen(), // Usa EmptyScreen como pantalla inicial
     );
   }
 }
