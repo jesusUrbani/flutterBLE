@@ -20,7 +20,7 @@ class _TestScreenState extends State<TestScreen> {
   bool _count = true;
   bool _isWaitingToReconnect = false;
   int? _currentRssi;
-  final double _maxDistanceRssi = -60;
+  final double _maxDistanceRssi = -43;
 
   @override
   void initState() {
@@ -212,14 +212,16 @@ class _TestScreenState extends State<TestScreen> {
         _isWaitingToReconnect = true;
         _isConnected = false;
         _bleMessage = "Esperando 5 segundos para nueva conexión...";
+        // Resetear el nombre del dispositivo al iniciar reconexión
+        _bleName = "Buscando dispositivo...";
       });
 
       await _disconnectDevice();
-      _count = false; // Evita reconexiones múltiples
+      _count = false;
 
       await Future.delayed(const Duration(seconds: 5));
 
-      _count = true; // Permite reconexiones nuevamente
+      _count = true;
 
       if (!mounted) return;
 
@@ -227,15 +229,21 @@ class _TestScreenState extends State<TestScreen> {
         _isWaitingToReconnect = false;
         _bleMessage = "Buscando dispositivo más cercano...";
         _currentRssi = null;
+        // Asegurarse de que el nombre se resetee completamente
+        _bleName = "No conectado";
       });
 
+      // Forzar un nuevo escaneo completo
+      FlutterBluePlus.stopScan();
       _startAutoScan();
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _isWaitingToReconnect = false;
         _bleMessage = "Error al reconectar: $e";
+        _bleName = "Error de conexión";
       });
+      FlutterBluePlus.stopScan();
       _startAutoScan();
     }
   }
