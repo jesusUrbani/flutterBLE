@@ -104,9 +104,9 @@ class _TestScreenState extends State<TestScreen> {
       }
     });
 
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 8));
+    FlutterBluePlus.startScan(timeout: const Duration(seconds: 2));
 
-    _scanTimer = Timer(const Duration(seconds: 8), () {
+    _scanTimer = Timer(const Duration(seconds: 2), () {
       if (!deviceFound && !_isConnected && mounted) {
         _currentThresholdIndex++;
         if (_currentThresholdIndex < _rssiThresholds.length) {
