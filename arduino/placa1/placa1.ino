@@ -13,6 +13,9 @@ const char* password = "Cuarto123";
 // Configuración API
 const char* apiUrl = "http://192.168.31.197:3000/api/registros";
 
+// Configuración LED
+const int wifiLedPin = 2; // GPIO2 (LED integrado en muchas placas ESP32)
+
 // UUIDs para BLE
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
@@ -32,7 +35,10 @@ class MyServerCallbacks : public BLEServerCallbacks {
   void onDisconnect(BLEServer* pServer) {
     deviceConnected = false;
     Serial.println("Desconectado BLE");
+
+    delay(100);  // da tiempo a liberar recursos
     BLEDevice::startAdvertising();
+    Serial.println("Reanudando publicidad BLE");
   }
 };
 
@@ -42,7 +48,6 @@ void registrarConexionBLE() {
     http.begin(apiUrl);
     http.addHeader("Content-Type", "application/json");
 
-    // Usar StaticJsonDocument en lugar de Dynamic
     StaticJsonDocument<200> doc;
     doc["id_dispositivo"] = "ESP32-URBANI";
     doc["nombre_entrada"] = "BLE conectado";
@@ -67,25 +72,50 @@ void registrarConexionBLE() {
 }
 
 void connectToWiFi() {
+  if(WiFi.status() == WL_CONNECTED) {
+    digitalWrite(wifiLedPin, HIGH); // Enciende LED si ya está conectado
+    return;
+  }
+  
+  digitalWrite(wifiLedPin, LOW); // Apaga LED durante conexión
+  WiFi.disconnect();
+  delay(100);
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
+  
+  Serial.print("Conectando WiFi a ");
+  Serial.println(ssid);
+  
   WiFi.begin(ssid, password);
-  Serial.print("Conectando WiFi");
-
-  for (int i = 0; i < 20 && WiFi.status() != WL_CONNECTED; i++) {
+  
+  unsigned long startAttemptTime = millis();
+  
+  while(WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
     delay(500);
     Serial.print(".");
+    digitalWrite(wifiLedPin, !digitalRead(wifiLedPin)); // Parpadeo durante conexión
   }
-
-  if (WiFi.status() == WL_CONNECTED) {
+  
+  if(WiFi.status() != WL_CONNECTED) {
+    Serial.println("\nFallo en conexión WiFi");
+    digitalWrite(wifiLedPin, LOW);
+    ESP.restart();
+  } else {
+    digitalWrite(wifiLedPin, HIGH); // Enciende LED cuando conectado
     Serial.println("\nWiFi conectado");
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("\nError WiFi");
   }
 }
 
 void setup() {
   Serial.begin(115200);
+  
+  // Configurar pin del LED
+  pinMode(wifiLedPin, OUTPUT);
+  digitalWrite(wifiLedPin, LOW); // Inicia con LED apagado
+  
   connectToWiFi();
 
   BLEDevice::init("ESP32-BLE-URBANI");
@@ -110,8 +140,19 @@ void setup() {
 }
 
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    connectToWiFi();
+  static unsigned long lastWifiCheck = 0;
+  
+  // Verificar estado WiFi periódicamente
+  if(millis() - lastWifiCheck > 5000) {
+    lastWifiCheck = millis();
+    
+    if(WiFi.status() != WL_CONNECTED) {
+      digitalWrite(wifiLedPin, LOW); // Apaga LED si WiFi se desconecta
+      Serial.println("WiFi desconectado, intentando reconectar...");
+      connectToWiFi();
+    } else {
+      digitalWrite(wifiLedPin, HIGH); // Mantiene LED encendido si está conectado
+    }
   }
 
   if (deviceConnected) {
