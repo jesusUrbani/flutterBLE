@@ -1,37 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'test.dart'; // Importa la nueva pantalla
-import 'saldo.dart'; // Importa la nueva pantalla
-import 'beacon.dart'; // Importa la pantalla de detección de zonas de baliza
+import 'dart:async'; // Agrega esta línea
 
-void main() {
-  runApp(const MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class BeaconScreen extends StatefulWidget {
+  const BeaconScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'BLE Scanner',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
-      ),
-      home: const BeaconScreen(), // Usa EmptyScreen como pantalla inicial
-    );
-  }
+  State<BeaconScreen> createState() => _BleDeviceListScreenState();
 }
 
-class BleDeviceListScreen extends StatefulWidget {
-  const BleDeviceListScreen({super.key});
-
-  @override
-  State<BleDeviceListScreen> createState() => _BleDeviceListScreenState();
-}
-
-class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
+class _BleDeviceListScreenState extends State<BeaconScreen> {
   List<ScanResult> _scanResults = [];
   bool _isScanning = false;
   bool _hasPermissions = false;
@@ -39,12 +18,42 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
   String _message = "No conectado";
   bool _isConnected = false;
   BluetoothCharacteristic? _messageCharacteristic;
+  Timer? _scanTimer; // Agrega esta variable
+  Timer? _rssiTimer; // Nuevo timer para refrescar RSSI
+  int _currentRssi = 0; // RSSI actual del dispositivo conectado
 
   @override
   void initState() {
     super.initState();
     _checkPermissions();
     _setupBluetoothListeners();
+    // Iniciar el temporizador para escanear cada 2 segundos
+    _scanTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+      if (!_isScanning) {
+        _startScan();
+      }
+    });
+    // Iniciar el refresco de RSSI cada segundo
+    _rssiTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (_connectedDevice != null && _isConnected) {
+        try {
+          int rssi = await _connectedDevice!.readRssi();
+          setState(() {
+            _currentRssi = rssi;
+          });
+        } catch (_) {
+          // Ignorar errores de lectura de RSSI
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    // Cancelar el temporizador al destruir el widget
+    _scanTimer?.cancel();
+    _rssiTimer?.cancel(); // Cancelar el timer de RSSI
+    super.dispose();
   }
 
   Future<void> _checkPermissions() async {
@@ -194,6 +203,7 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
           _isConnected = false;
           _connectedDevice = null;
           _messageCharacteristic = null;
+          _currentRssi = 0; // Reiniciar RSSI al desconectar
         });
       } catch (e) {
         setState(() {
@@ -221,7 +231,9 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
               const SizedBox(height: 16),
               Text('Nombre: ${device.platformName}'),
               Text('ID: ${device.remoteId.str}'),
-              Text('RSSI: ${result.rssi}'),
+              Text(
+                'RSSI: ${_connectedDevice?.remoteId == device.remoteId && _isConnected ? _currentRssi : result.rssi}',
+              ),
               const SizedBox(height: 16),
               if (_connectedDevice?.remoteId == device.remoteId && _isConnected)
                 Column(
@@ -312,11 +324,12 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
                   : 'No se encontraron dispositivos',
               style: TextStyle(color: Colors.grey[600]),
             ),
-            if (!_isScanning)
+            /*
               ElevatedButton(
                 onPressed: _startScan,
                 child: const Text('Iniciar escaneo'),
               ),
+              */
           ],
         ),
       );
@@ -346,7 +359,7 @@ class _BleDeviceListScreenState extends State<BleDeviceListScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(device.remoteId.str),
-                Text('RSSI: ${result.rssi}'),
+                Text('RSSI: ${isConnected ? _currentRssi : result.rssi}'),
                 if (isConnected)
                   Text(
                     'Mensaje: $_message',

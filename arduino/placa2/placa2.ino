@@ -1,74 +1,41 @@
 #include <BLEDevice.h>
-#include <BLEServer.h>
 #include <BLEUtils.h>
-#include <BLE2902.h>
-
-// UUIDs para el servicio y la característica
-#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-
-BLECharacteristic *pCharacteristic;
-bool deviceConnected = false;
-
-class MyServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer* pServer) {
-    deviceConnected = true;
-    Serial.println("Dispositivo conectado");
-  }
-
-  void onDisconnect(BLEServer* pServer) {
-    deviceConnected = false;
-    Serial.println("Dispositivo desconectado");
-    // 🔁 Reiniciar la publicidad para ser visible otra vez
-    BLEDevice::startAdvertising();
-    Serial.println("Reiniciando publicidad BLE...");
-  }
-};
+#include <BLEBeacon.h>
+#include <BLEAdvertising.h>
 
 void setup() {
   Serial.begin(115200);
 
-  // Inicializa el dispositivo BLE
-  BLEDevice::init("ESP32-BLE-URBANI-2"); // Nombre del dispositivo
-  BLEServer *pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new MyServerCallbacks());
+  BLEDevice::init("Delim_B");
 
-  // Crea un servicio BLE
-  BLEService *pService = pServer->createService(SERVICE_UUID);
+  BLEBeacon oBeacon = BLEBeacon();
+  oBeacon.setManufacturerId(0x004C);  // Apple ID
+  oBeacon.setProximityUUID(BLEUUID("12345678-1234-1234-1234-1234567890ab"));
+  oBeacon.setMajor(100);
+  oBeacon.setMinor(1);
+  oBeacon.setSignalPower(-59);
 
-  // Crea una característica BLE
-  pCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID,
-                      BLECharacteristic::PROPERTY_READ |
-                      BLECharacteristic::PROPERTY_WRITE |
-                      BLECharacteristic::PROPERTY_NOTIFY
-                    );
+  BLEAdvertisementData oAdvertisementData;
+  BLEAdvertisementData oScanResponseData;
 
-  // Agrega descriptor para notificaciones
-  pCharacteristic->addDescriptor(new BLE2902());
+  // Usa un objeto String (Arduino) para evitar problemas con std::string
+  String serviceData = "";
+  serviceData += (char)26;
+  serviceData += (char)0xFF;
+  serviceData += oBeacon.getData();  // ✅ Esto ya es tipo String, y funciona bien
 
-  // Establece valor inicial
-  pCharacteristic->setValue("Hola desde ESP32");
+  oAdvertisementData.setFlags(0x04); // Discoverable
+  oAdvertisementData.addData(serviceData);  // ✅ addData espera String
 
-  // Inicia el servicio
-  pService->start();
+  oScanResponseData.setName("Delim_B");
 
-  // Empieza la publicidad BLE
-  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->setAdvertisementData(oAdvertisementData);
+  pAdvertising->setScanResponseData(oScanResponseData);
+  pAdvertising->setAdvertisementType(ADV_TYPE_IND); // Conectable
   pAdvertising->start();
-  Serial.println("Esperando conexión por BLE...");
+
+  Serial.println("iBeacon 'Delim_B' iniciado.");
 }
 
-void loop() {
-  if (deviceConnected) {
-    // Enviar una notificación cada 2 segundos
-    static unsigned long lastTime = 0;
-    if (millis() - lastTime > 2000) {
-      lastTime = millis();
-      String mensaje = "Mensaje " + String(millis() / 1000);
-      pCharacteristic->setValue(mensaje.c_str());
-      pCharacteristic->notify(); // Envía el valor al cliente
-      Serial.println("Notificando: " + mensaje);
-    }
-  }
-}
+void loop() {}
