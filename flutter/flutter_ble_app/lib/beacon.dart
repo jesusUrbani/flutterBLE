@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'dart:async'; // Agrega esta línea
+import 'dart:async';
 
 class BeaconScreen extends StatefulWidget {
   const BeaconScreen({super.key});
@@ -18,41 +18,25 @@ class _BleDeviceListScreenState extends State<BeaconScreen> {
   String _message = "No conectado";
   bool _isConnected = false;
   BluetoothCharacteristic? _messageCharacteristic;
-  Timer? _scanTimer; // Agrega esta variable
-  Timer? _rssiTimer; // Nuevo timer para refrescar RSSI
-  int _currentRssi = 0; // RSSI actual del dispositivo conectado
+  Timer? _scanTimer;
+  Timer? _rssiTimer;
+  Map<String, int> _deviceRssi = {};
+  bool _isRssiMonitoring = false;
 
   @override
   void initState() {
     super.initState();
     _checkPermissions();
     _setupBluetoothListeners();
-    // Iniciar el temporizador para escanear cada 2 segundos
-    _scanTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
-      if (!_isScanning) {
-        _startScan();
-      }
-    });
-    // Iniciar el refresco de RSSI cada segundo
-    _rssiTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
-      if (_connectedDevice != null && _isConnected) {
-        try {
-          int rssi = await _connectedDevice!.readRssi();
-          setState(() {
-            _currentRssi = rssi;
-          });
-        } catch (_) {
-          // Ignorar errores de lectura de RSSI
-        }
-      }
-    });
+    _startScan();
   }
 
   @override
   void dispose() {
-    // Cancelar el temporizador al destruir el widget
     _scanTimer?.cancel();
-    _rssiTimer?.cancel(); // Cancelar el timer de RSSI
+    _rssiTimer?.cancel();
+    _stopRssiUpdates();
+    _disconnectDevice();
     super.dispose();
   }
 
@@ -82,6 +66,16 @@ class _BleDeviceListScreenState extends State<BeaconScreen> {
         _scanResults = results
             .where((result) => result.device.platformName.startsWith('Delim_'))
             .toList();
+
+        // Actualizar RSSI de los dispositivos encontrados
+        for (var result in _scanResults) {
+          _deviceRssi[result.device.remoteId.str] = result.rssi;
+        }
+
+        // Iniciar monitoreo de RSSI si hay dispositivos
+        if (_scanResults.isNotEmpty && !_isRssiMonitoring) {
+          _startRssiUpdates();
+        }
       });
     });
 
@@ -90,6 +84,56 @@ class _BleDeviceListScreenState extends State<BeaconScreen> {
         _isScanning = isScanning;
       });
     });
+  }
+
+  void _startRssiUpdates() {
+    _stopRssiUpdates(); // Detener cualquier actualización previa
+
+    setState(() {
+      _isRssiMonitoring = true;
+    });
+
+    _rssiTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (_scanResults.isEmpty) {
+        _stopRssiUpdates();
+        return;
+      }
+
+      // Crear una copia de los resultados para evitar modificaciones durante la iteración
+      final devices = List<BluetoothDevice>.from(
+        _scanResults.map((result) => result.device),
+      );
+
+      for (var device in devices) {
+        try {
+          if (device.isConnected) {
+            // Para dispositivos conectados, podemos leer el RSSI directamente
+            int rssi = await device.readRssi();
+            _updateRssi(device.remoteId.str, rssi);
+          } else {
+            // Para dispositivos no conectados, necesitamos escanear continuamente
+            // El RSSI se actualizará a través del listener de scanResults
+          }
+        } catch (e) {
+          debugPrint('Error al leer RSSI: $e');
+        }
+      }
+    });
+  }
+
+  void _stopRssiUpdates() {
+    _rssiTimer?.cancel();
+    setState(() {
+      _isRssiMonitoring = false;
+    });
+  }
+
+  void _updateRssi(String deviceId, int rssi) {
+    if (mounted) {
+      setState(() {
+        _deviceRssi[deviceId] = rssi;
+      });
+    }
   }
 
   Future<void> _startScan() async {
@@ -101,11 +145,18 @@ class _BleDeviceListScreenState extends State<BeaconScreen> {
     try {
       setState(() {
         _scanResults = [];
+        _deviceRssi.clear();
       });
+
+      // Configurar escaneo continuo con intervalo
       await FlutterBluePlus.startScan(
         timeout: const Duration(seconds: 15),
         androidUsesFineLocation: false,
       );
+
+      // Detener el escaneo después de 15 segundos
+      _scanTimer?.cancel();
+      _scanTimer = Timer(const Duration(seconds: 15), _stopScan);
     } catch (e) {
       ScaffoldMessenger.of(
         context,
@@ -203,7 +254,6 @@ class _BleDeviceListScreenState extends State<BeaconScreen> {
           _isConnected = false;
           _connectedDevice = null;
           _messageCharacteristic = null;
-          _currentRssi = 0; // Reiniciar RSSI al desconectar
         });
       } catch (e) {
         setState(() {
@@ -213,8 +263,129 @@ class _BleDeviceListScreenState extends State<BeaconScreen> {
     }
   }
 
+  Widget _buildDeviceList() {
+    if (!_hasPermissions) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text('Se requieren permisos para escanear dispositivos BLE'),
+            ElevatedButton(
+              onPressed: _checkPermissions,
+              child: const Text('Solicitar permisos'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_scanResults.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.bluetooth, size: 64, color: Colors.grey[400]),
+            const SizedBox(height: 16),
+            Text(
+              _isScanning
+                  ? 'Escaneando dispositivos...'
+                  : 'No se encontraron dispositivos',
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _startScan,
+      child: ListView.builder(
+        itemCount: _scanResults.length,
+        itemBuilder: (context, index) {
+          final result = _scanResults[index];
+          final device = result.device;
+          final isConnected =
+              _connectedDevice?.remoteId == device.remoteId && _isConnected;
+          final rssi = _deviceRssi[device.remoteId.str] ?? result.rssi;
+
+          // Calcular la intensidad de la señal como porcentaje (aproximado)
+          int signalStrength = 0;
+          if (rssi > -50) {
+            signalStrength = 100;
+          } else if (rssi > -60) {
+            signalStrength = 80;
+          } else if (rssi > -70) {
+            signalStrength = 60;
+          } else if (rssi > -80) {
+            signalStrength = 40;
+          } else if (rssi > -90) {
+            signalStrength = 20;
+          }
+
+          return Card(
+            margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+            child: ListTile(
+              leading: Icon(
+                Icons.bluetooth,
+                color: isConnected ? Colors.blue : Colors.grey,
+              ),
+              title: Text(
+                device.platformName.isNotEmpty
+                    ? device.platformName
+                    : 'Dispositivo desconocido',
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(device.remoteId.str),
+                  Row(
+                    children: [
+                      Text('RSSI: $rssi dBm'),
+                      const SizedBox(width: 10),
+                      Text(
+                        '$signalStrength%',
+                        style: TextStyle(
+                          color: signalStrength > 60
+                              ? Colors.green
+                              : signalStrength > 30
+                              ? Colors.orange
+                              : Colors.red,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Icon(
+                        Icons.signal_cellular_alt,
+                        size: 16,
+                        color: signalStrength > 60
+                            ? Colors.green
+                            : signalStrength > 30
+                            ? Colors.orange
+                            : Colors.red,
+                      ),
+                    ],
+                  ),
+                  if (isConnected)
+                    Text(
+                      'Mensaje: $_message',
+                      style: const TextStyle(color: Colors.green),
+                    ),
+                ],
+              ),
+              trailing: IconButton(
+                icon: const Icon(Icons.info_outline),
+                onPressed: () => _showDeviceDetails(result),
+              ),
+              onTap: () => _showDeviceDetails(result),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   void _showDeviceDetails(ScanResult result) {
     final device = result.device;
+    final rssi = _deviceRssi[device.remoteId.str] ?? result.rssi;
     showModalBottomSheet(
       context: context,
       builder: (context) {
@@ -231,9 +402,7 @@ class _BleDeviceListScreenState extends State<BeaconScreen> {
               const SizedBox(height: 16),
               Text('Nombre: ${device.platformName}'),
               Text('ID: ${device.remoteId.str}'),
-              Text(
-                'RSSI: ${_connectedDevice?.remoteId == device.remoteId && _isConnected ? _currentRssi : result.rssi}',
-              ),
+              Text('RSSI: $rssi dBm'),
               const SizedBox(height: 16),
               if (_connectedDevice?.remoteId == device.remoteId && _isConnected)
                 Column(
@@ -242,11 +411,9 @@ class _BleDeviceListScreenState extends State<BeaconScreen> {
                     const SizedBox(height: 16),
                     ElevatedButton(
                       onPressed: () async {
-                        await _disconnectDevice(); // Agregar paréntesis y await
+                        await _disconnectDevice();
                         if (mounted) {
-                          Navigator.pop(
-                            context,
-                          ); // Cerrar después de desconectar
+                          Navigator.pop(context);
                         }
                       },
                       child: const Text('Desconectar'),
@@ -292,89 +459,6 @@ class _BleDeviceListScreenState extends State<BeaconScreen> {
         ],
       ),
       body: _buildDeviceList(),
-    );
-  }
-
-  Widget _buildDeviceList() {
-    if (!_hasPermissions) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Text('Se requieren permisos para escanear dispositivos BLE'),
-            ElevatedButton(
-              onPressed: _checkPermissions,
-              child: const Text('Solicitar permisos'),
-            ),
-          ],
-        ),
-      );
-    }
-
-    if (_scanResults.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.bluetooth, size: 64, color: Colors.grey[400]),
-            const SizedBox(height: 16),
-            Text(
-              _isScanning
-                  ? 'Escaneando dispositivos...'
-                  : 'No se encontraron dispositivos',
-              style: TextStyle(color: Colors.grey[600]),
-            ),
-            /*
-              ElevatedButton(
-                onPressed: _startScan,
-                child: const Text('Iniciar escaneo'),
-              ),
-              */
-          ],
-        ),
-      );
-    }
-
-    return ListView.builder(
-      itemCount: _scanResults.length,
-      itemBuilder: (context, index) {
-        final result = _scanResults[index];
-        final device = result.device;
-        final isConnected =
-            _connectedDevice?.remoteId == device.remoteId && _isConnected;
-
-        return Card(
-          margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-          child: ListTile(
-            leading: Icon(
-              Icons.bluetooth,
-              color: isConnected ? Colors.blue : Colors.grey,
-            ),
-            title: Text(
-              device.platformName.isNotEmpty
-                  ? device.platformName
-                  : 'Dispositivo desconocido',
-            ),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(device.remoteId.str),
-                Text('RSSI: ${isConnected ? _currentRssi : result.rssi}'),
-                if (isConnected)
-                  Text(
-                    'Mensaje: $_message',
-                    style: const TextStyle(color: Colors.green),
-                  ),
-              ],
-            ),
-            trailing: IconButton(
-              icon: const Icon(Icons.info_outline),
-              onPressed: () => _showDeviceDetails(result),
-            ),
-            onTap: () => _showDeviceDetails(result),
-          ),
-        );
-      },
     );
   }
 }
