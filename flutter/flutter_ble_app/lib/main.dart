@@ -12,14 +12,16 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
+  final title = 'Flutter BLE Scan Demo';
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'BLE Scanner',
+      title: title,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: const BeaconScreen(), // Usa EmptyScreen como pantalla inicial
+      home: MyHomePage(title: title), // Usa EmptyScreen como pantalla inicial
     );
   }
 }
