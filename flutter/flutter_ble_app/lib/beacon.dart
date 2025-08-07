@@ -26,7 +26,7 @@ class _MyHomePageState extends State<MyHomePage> {
     if (isScanning) {
       FlutterBluePlus.startScan(
         androidScanMode: AndroidScanMode(scan_mode),
-        oneByOne: true,
+        oneByOne: false,
       );
       scan();
     } else {
@@ -80,10 +80,10 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget deviceName(ScanResult r) {
     String name;
 
-    if (r.device.name.isNotEmpty) {
-      name = r.device.name;
-    } else if (r.advertisementData.localName.isNotEmpty) {
+    if (r.advertisementData.localName.isNotEmpty) {
       name = r.advertisementData.localName;
+    } else if (r.device.name.isNotEmpty) {
+      name = r.device.name;
     } else {
       name = 'N/A';
     }
@@ -116,13 +116,21 @@ class _MyHomePageState extends State<MyHomePage> {
   /* UI */
   @override
   Widget build(BuildContext context) {
+    // Filtra solo los dispositivos con nombre
+    final filteredList = scanResultList.where((r) {
+      final name = r.device.name.isNotEmpty
+          ? r.device.name
+          : r.advertisementData.localName;
+      return name.isNotEmpty;
+    }).toList();
+
     return Scaffold(
       appBar: AppBar(title: Text(widget.title)),
       body: Center(
         child: ListView.separated(
-          itemCount: scanResultList.length,
+          itemCount: filteredList.length,
           itemBuilder: (context, index) {
-            return listItem(scanResultList[index]);
+            return listItem(filteredList[index]);
           },
           separatorBuilder: (BuildContext context, int index) {
             return const Divider();
