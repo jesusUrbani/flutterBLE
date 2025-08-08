@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'dart:async';
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({Key? key, required this.title}) : super(key: key);
@@ -13,10 +14,56 @@ class _MyHomePageState extends State<MyHomePage> {
   List<ScanResult> scanResultList = [];
   var scan_mode = 0;
   bool isScanning = false;
+  Timer? periodicScanTimer;
+  StreamSubscription<List<ScanResult>>? scanSubscription;
 
   @override
   void initState() {
     super.initState();
+    // Solo una vez: escucha los resultados de escaneo
+    scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+      for (var result in results) {
+        int index = scanResultList.indexWhere(
+          (r) => r.device.id.id == result.device.id.id,
+        );
+        if (index >= 0) {
+          scanResultList[index] = result;
+        } else {
+          scanResultList.add(result);
+        }
+      }
+      scanResultList.removeWhere(
+        (r) => !results.any((res) => res.device.id.id == r.device.id.id),
+      );
+      setState(() {});
+    });
+    startPeriodicScan();
+  }
+
+  @override
+  void dispose() {
+    periodicScanTimer?.cancel();
+    scanSubscription?.cancel();
+    super.dispose();
+  }
+
+  void startPeriodicScan() {
+    periodicScanTimer?.cancel();
+    periodicScanTimer = Timer.periodic(Duration(seconds: 4), (_) async {
+      if (!isScanning) {
+        isScanning = true;
+        FlutterBluePlus.startScan(
+          androidScanMode: AndroidScanMode(scan_mode),
+          oneByOne: false,
+        );
+        setState(() {});
+      }
+      // Detén el escaneo después de 2 segundos
+      await Future.delayed(Duration(seconds: 2));
+      FlutterBluePlus.stopScan();
+      isScanning = false;
+      setState(() {});
+    });
   }
 
   /* 시작, 정지 */
@@ -28,7 +75,7 @@ class _MyHomePageState extends State<MyHomePage> {
         androidScanMode: AndroidScanMode(scan_mode),
         oneByOne: false,
       );
-      scan();
+      //scan();
     } else {
       FlutterBluePlus.stopScan();
     }
@@ -54,13 +101,24 @@ class _MyHomePageState extends State<MyHomePage> {
   /* Scan */
   void scan() async {
     if (isScanning) {
-      // Listen to scan results
-
       FlutterBluePlus.scanResults.listen((results) {
-        // do something with scan results
-
-        scanResultList = results;
-        // update state
+        // Actualiza o agrega dispositivos según su id
+        for (var result in results) {
+          int index = scanResultList.indexWhere(
+            (r) => r.device.id.id == result.device.id.id,
+          );
+          if (index >= 0) {
+            // Actualiza el RSSI y datos si ya existe
+            scanResultList[index] = result;
+          } else {
+            // Agrega nuevo dispositivo
+            scanResultList.add(result);
+          }
+        }
+        // Limpia dispositivos que ya no están presentes
+        scanResultList.removeWhere(
+          (r) => !results.any((res) => res.device.id.id == r.device.id.id),
+        );
         setState(() {});
       });
     }
@@ -118,9 +176,9 @@ class _MyHomePageState extends State<MyHomePage> {
   Widget build(BuildContext context) {
     // Filtra solo los dispositivos con nombre
     final filteredList = scanResultList.where((r) {
-      final name = r.device.name.isNotEmpty
-          ? r.device.name
-          : r.advertisementData.localName;
+      final name = r.advertisementData.localName.isNotEmpty
+          ? r.advertisementData.localName
+          : r.device.name;
       return name.isNotEmpty;
     }).toList();
 
