@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'dart:async';
 import 'dart:collection';
+import 'package:permission_handler/permission_handler.dart';
+
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({Key? key, required this.title}) : super(key: key);
@@ -16,6 +18,8 @@ class _MyHomePageState extends State<MyHomePage> {
   Map<String, Queue<int>> rssiHistory = {}; // Últimos valores para promedio
   Map<String, DateTime> lastSeen = {}; // Última vez que se recibió paquete
 
+  bool _bluetoothOn = true;
+
   final int rssiWindow = 5; // Ventana de suavizado
 
   bool isScanning = false;
@@ -25,7 +29,39 @@ class _MyHomePageState extends State<MyHomePage> {
   void initState() {
     super.initState();
 
-    // Inicia escaneo continuo
+    _checkPermissionsAndBluetooth();
+  }
+
+    Future<void> _checkPermissionsAndBluetooth() async {
+    // Solicita permisos
+    await [
+      Permission.bluetoothScan,
+      Permission.bluetoothConnect,
+      Permission.location,
+    ].request();
+
+    // Escucha el estado del Bluetooth
+    FlutterBluePlus.adapterState.listen((state) {
+      setState(() {
+        _bluetoothOn = state == BluetoothAdapterState.on;
+      });
+      if (_bluetoothOn && !isScanning) {
+        _startScan();
+      }
+    });
+
+    // Verifica el estado inicial
+    final state = await FlutterBluePlus.adapterState.first;
+    setState(() {
+      _bluetoothOn = state == BluetoothAdapterState.on;
+    });
+    if (_bluetoothOn) {
+      _startScan();
+    }
+  }
+
+  void _startScan() {
+// Inicia escaneo continuo
     FlutterBluePlus.startScan(
       androidScanMode: AndroidScanMode.lowLatency, // Más lecturas por segundo
       oneByOne: false,
@@ -143,6 +179,18 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_bluetoothOn) {
+      return Scaffold(
+        appBar: AppBar(title: Text(widget.title)),
+        body: const Center(
+          child: Text(
+            'Por favor, enciende el Bluetooth para buscar dispositivos.',
+            style: TextStyle(fontSize: 18),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
     // Filtrar solo los dispositivos con nombre
     final filteredList = scanResultList.where((r) {
       final name = r.advertisementData.localName.isNotEmpty
