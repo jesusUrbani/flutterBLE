@@ -14,6 +14,8 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   List<ScanResult> scanResultList = [];
   Map<String, Queue<int>> rssiHistory = {}; // Últimos valores para promedio
+  Map<String, DateTime> lastSeen = {}; // Última vez que se recibió paquete
+
   final int rssiWindow = 5; // Ventana de suavizado
 
   bool isScanning = false;
@@ -34,7 +36,7 @@ class _MyHomePageState extends State<MyHomePage> {
       for (var result in results) {
         final id = result.device.id.id;
 
-        // --- Guardar histórico ---
+        // --- Guardar histórico de RSSI ---
         rssiHistory.putIfAbsent(id, () => Queue<int>());
         final history = rssiHistory[id]!;
 
@@ -42,6 +44,9 @@ class _MyHomePageState extends State<MyHomePage> {
         if (history.length > rssiWindow) {
           history.removeFirst();
         }
+
+        // --- Guardar timestamp ---
+        lastSeen[id] = DateTime.now();
 
         // --- Calcular promedio ---
         final avgRssi = history.reduce((a, b) => a + b) ~/ history.length;
@@ -67,8 +72,7 @@ class _MyHomePageState extends State<MyHomePage> {
         (r) => !results.any((res) => res.device.id.id == r.device.id.id),
       );
 
-      // Siempre refrescamos la UI
-      setState(() {});
+      setState(() {}); // Refrescar siempre
     });
   }
 
@@ -80,6 +84,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Widget deviceSignal(ScanResult r) {
     final lastRssi = rssiHistory[r.device.id.id]?.last ?? r.rssi;
+    final seen = lastSeen[r.device.id.id];
+    final seenText = seen != null
+        ? "${seen.hour.toString().padLeft(2, '0')}:${seen.minute.toString().padLeft(2, '0')}:${seen.second.toString().padLeft(2, '0')}"
+        : "--:--:--";
+
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.end,
@@ -92,6 +101,10 @@ class _MyHomePageState extends State<MyHomePage> {
           "(${lastRssi} dBm)",
           style: TextStyle(fontSize: 12, color: Colors.grey),
         ), // Última lectura
+        Text(
+          "Visto: $seenText",
+          style: TextStyle(fontSize: 12, color: Colors.blueGrey),
+        ), // Hora última actualización
       ],
     );
   }

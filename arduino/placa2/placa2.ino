@@ -1,41 +1,40 @@
 #include <BLEDevice.h>
 #include <BLEUtils.h>
-#include <BLEBeacon.h>
 #include <BLEAdvertising.h>
+
+#define SERVICE_UUID "12345678-1234-1234-1234-1234567890ab"
 
 void setup() {
   Serial.begin(115200);
 
-  BLEDevice::init("Delim_B");
+  // Inicializar BLE
+  BLEDevice::init("Delim_B"); // Nombre visible
 
-  BLEBeacon oBeacon = BLEBeacon();
-  oBeacon.setManufacturerId(0x004C);  // Apple ID
-  oBeacon.setProximityUUID(BLEUUID("12345678-1234-1234-1234-1234567890ab"));
-  oBeacon.setMajor(100);
-  oBeacon.setMinor(1);
-  oBeacon.setSignalPower(-59);
+  BLEServer *pServer = BLEDevice::createServer();
 
-  BLEAdvertisementData oAdvertisementData;
-  BLEAdvertisementData oScanResponseData;
+  // Crear advertising
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
 
-  // Usa un objeto String (Arduino) para evitar problemas con std::string
-  String serviceData = "";
-  serviceData += (char)26;
-  serviceData += (char)0xFF;
-  serviceData += oBeacon.getData();  // ✅ Esto ya es tipo String, y funciona bien
+  // Añadir UUID de servicio directamente al advertising
+  pAdvertising->addServiceUUID(SERVICE_UUID);
 
-  oAdvertisementData.setFlags(0x04); // Discoverable
-  oAdvertisementData.addData(serviceData);  // ✅ addData espera String
+  // Configuración de tipo y nombre
+  BLEAdvertisementData scanResponseData;
+  scanResponseData.setName("Delim_B");
+  pAdvertising->setScanResponseData(scanResponseData);
 
-  oScanResponseData.setName("Delim_B");
+  // Intervalo rápido (100 ms)
+  pAdvertising->setMinInterval(0x00A0);
+  pAdvertising->setMaxInterval(0x00A0);
 
-  BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
-  pAdvertising->setAdvertisementData(oAdvertisementData);
-  pAdvertising->setScanResponseData(oScanResponseData);
-  pAdvertising->setAdvertisementType(ADV_TYPE_IND); // Conectable
+  // Potencia de transmisión alta
+  BLEDevice::setPower(ESP_PWR_LVL_P9);
+
+  // Iniciar publicidad
   pAdvertising->start();
-
-  Serial.println("iBeacon 'Delim_B' iniciado.");
+  Serial.println("Beacon BLE genérico iniciado.");
 }
 
-void loop() {}
+void loop() {
+  // No se necesita código aquí
+}
