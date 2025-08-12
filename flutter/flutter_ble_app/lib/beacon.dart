@@ -16,12 +16,19 @@ class _MyHomePageState extends State<MyHomePage> {
   bool isScanning = false;
   Timer? periodicScanTimer;
   StreamSubscription<List<ScanResult>>? scanSubscription;
+  // Guarda los dispositivos conectados para evitar reconexiones
+  final Set<String> connectedDeviceIds = {};
 
   @override
   void initState() {
     super.initState();
-    // Solo una vez: escucha los resultados de escaneo
-    scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+    FlutterBluePlus.startScan(
+      androidScanMode: AndroidScanMode(scan_mode),
+      oneByOne: false,
+    );
+    isScanning = true;
+    setState(() {});
+    scanSubscription = FlutterBluePlus.scanResults.listen((results) async {
       for (var result in results) {
         int index = scanResultList.indexWhere(
           (r) => r.device.id.id == result.device.id.id,
@@ -31,13 +38,31 @@ class _MyHomePageState extends State<MyHomePage> {
         } else {
           scanResultList.add(result);
         }
+
+        // --- CONEXIÓN AUTOMÁTICA SI EL NOMBRE EMPIEZA CON "delim" ---
+        final name = result.advertisementData.localName.isNotEmpty
+            ? result.advertisementData.localName
+            : result.device.name;
+        if (name.toLowerCase().startsWith('delim') &&
+            !connectedDeviceIds.contains(result.device.id.id)) {
+          try {
+            await result.device.connect(
+              autoConnect: false,
+              timeout: Duration(seconds: 8),
+            );
+            connectedDeviceIds.add(result.device.id.id);
+            print('Conectado a ${result.device.id.id}');
+          } catch (e) {
+            print('No se pudo conectar a ${result.device.id.id}: $e');
+          }
+        }
       }
       scanResultList.removeWhere(
         (r) => !results.any((res) => res.device.id.id == r.device.id.id),
       );
       setState(() {});
     });
-    startPeriodicScan();
+    //startPeriodicScan();
   }
 
   @override
@@ -102,7 +127,7 @@ class _MyHomePageState extends State<MyHomePage> {
   void scan() async {
     if (isScanning) {
       FlutterBluePlus.scanResults.listen((results) {
-        // Actualiza o agrega dispositivos según su id
+        // Actualiza o agrega dispositivos según su id-
         for (var result in results) {
           int index = scanResultList.indexWhere(
             (r) => r.device.id.id == result.device.id.id,
