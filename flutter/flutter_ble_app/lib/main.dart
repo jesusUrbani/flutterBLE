@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'test.dart'; // Importa la nueva pantalla
-import 'saldo.dart'; // Importa la nueva pantalla
 import 'beacon.dart'; // Importa la pantalla de detección de zonas de baliza
+import 'caseta.dart'; // Importa la pantalla de caseta
 
 void main() {
   runApp(const MyApp());
@@ -21,7 +20,8 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: MyHomePage(title: title), // Usa EmptyScreen como pantalla inicial
+      //home: MyHomePage(title: title), // Usa EmptyScreen como pantalla inicial
+      home: CasetaPage(title: title), // Usa EmptyScreen como pantalla inicial
     );
   }
 }
