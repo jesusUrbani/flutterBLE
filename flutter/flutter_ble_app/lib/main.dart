@@ -20,8 +20,8 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
-      home: MyHomePage(title: title), // Usa EmptyScreen como pantalla inicial
-      //home: CasetaPage(title: title), // Usa EmptyScreen como pantalla inicial
+      //home: MyHomePage(title: title), // Usa EmptyScreen como pantalla inicial
+      home: CasetaPage(title: title), // Usa EmptyScreen como pantalla inicial
     );
   }
 }
