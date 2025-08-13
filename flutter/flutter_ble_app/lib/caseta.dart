@@ -13,24 +13,49 @@ class CasetaPage extends StatefulWidget {
 }
 
 class _CasetaPageState extends State<CasetaPage> {
+  // Variables de estado
   String estadoConexion = 'Sin conexión';
   Color colorEstado = Colors.black;
-  List<ScanResult> beaconsDelim =
-      []; // Lista para beacons que empiezan con "Delim"
+  List<ScanResult> beaconsDelim = [];
+  BluetoothDevice? dispositivoBLE;
+  bool isConnecting = false;
+  String estadoBLE = "";
+  List<String> mensajesBLE = [];
 
-  List<ScanResult> scanResultList = [];
-  Map<String, Queue<int>> rssiHistory = {};
-  Map<String, DateTime> lastSeen = {};
-
-  bool _bluetoothOn = true;
-  final int rssiWindow = 5;
+  // Variables de escaneo BLE
+  bool _bluetoothOn = false;
   bool isScanning = false;
   StreamSubscription<List<ScanResult>>? scanSubscription;
+  Timer? _beaconCheckTimer;
+
+  // Variables para recepción de mensajes
+  StreamSubscription<List<int>>? mensajesSubscription;
+  BluetoothCharacteristic? caracteristicaNotificaciones;
+
+  // UUIDs
+  final String serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+  final String characteristicUUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
 
   @override
   void initState() {
     super.initState();
     _checkPermissionsAndBluetooth();
+    _startBeaconCheckTimer();
+  }
+
+  void _startBeaconCheckTimer() {
+    _beaconCheckTimer = Timer.periodic(Duration(seconds: 3), (timer) {
+      if (dispositivoBLE != null && beaconsDelim.length < 2) {
+        _detenerConexionBLE();
+        setState(() {
+          estadoBLE = "Desconectado (beacons perdidos)";
+          estadoConexion = 'Fuera de línea';
+          colorEstado = Colors.orange;
+        });
+      } else if (dispositivoBLE == null && beaconsDelim.length >= 2) {
+        _conectarABleUrbani();
+      }
+    });
   }
 
   Future<void> _checkPermissionsAndBluetooth() async {
@@ -44,9 +69,11 @@ class _CasetaPageState extends State<CasetaPage> {
       setState(() {
         _bluetoothOn = state == BluetoothAdapterState.on;
         if (!_bluetoothOn) {
+          _detenerConexionBLE();
           estadoConexion = 'Sin conexión';
           colorEstado = Colors.black;
           beaconsDelim.clear();
+          estadoBLE = "Bluetooth apagado";
         }
       });
       if (_bluetoothOn && !isScanning) {
@@ -71,8 +98,7 @@ class _CasetaPageState extends State<CasetaPage> {
     isScanning = true;
 
     scanSubscription = FlutterBluePlus.scanResults.listen((results) {
-      // Filtrar beacons que empiezan con "Delim" y están en el rango de RSSI
-      final delimBeacons = results.where((result) {
+      final currentBeacons = results.where((result) {
         final name = result.advertisementData.localName.isNotEmpty
             ? result.advertisementData.localName
             : result.device.name;
@@ -81,41 +107,116 @@ class _CasetaPageState extends State<CasetaPage> {
             result.rssi <= -1;
       }).toList();
 
-      // Actualizar estado según los beacons detectados
+      setState(() {
+        beaconsDelim = currentBeacons;
+      });
+
       setState(() {
         if (!_bluetoothOn) {
           estadoConexion = 'Sin conexión';
           colorEstado = Colors.black;
-        } else if (delimBeacons.isNotEmpty) {
-          estadoConexion = 'Conectado';
+        } else if (dispositivoBLE != null) {
+          estadoConexion = 'Conectado (${beaconsDelim.length} beacons)';
           colorEstado = Colors.green;
+        } else if (beaconsDelim.isNotEmpty) {
+          estadoConexion = 'Beacons detectados: ${beaconsDelim.length}';
+          colorEstado = Colors.blue;
         } else {
           estadoConexion = 'Fuera de línea';
           colorEstado = Colors.orange;
         }
-
-        beaconsDelim = delimBeacons;
       });
-
-      // Procesamiento adicional para histórico de RSSI
-      for (var result in delimBeacons) {
-        final id = result.device.id.id;
-        rssiHistory.putIfAbsent(id, () => Queue<int>());
-        final history = rssiHistory[id]!;
-        history.addLast(result.rssi);
-        if (history.length > rssiWindow) {
-          history.removeFirst();
-        }
-        lastSeen[id] = DateTime.now();
-      }
     });
   }
 
-  @override
-  void dispose() {
-    scanSubscription?.cancel();
-    FlutterBluePlus.stopScan();
-    super.dispose();
+  Future<void> _conectarABleUrbani() async {
+    if (isConnecting || dispositivoBLE != null) return;
+
+    setState(() {
+      isConnecting = true;
+      estadoBLE = "Buscando BLE_URBANI...";
+    });
+
+    try {
+      await FlutterBluePlus.stopScan();
+      isScanning = false;
+
+      final dispositivos = await Future.any([
+        FlutterBluePlus.scanResults.firstWhere(
+          (results) => results.any((device) {
+            final name = device.advertisementData.localName.isNotEmpty
+                ? device.advertisementData.localName
+                : device.device.name;
+            return name == "BLE_URBANI";
+          }),
+        ),
+        Future.delayed(
+          Duration(seconds: 5),
+        ).then((_) => throw TimeoutException("Tiempo agotado")),
+      ]);
+
+      final targetDevice = dispositivos.firstWhere(
+        (d) =>
+            (d.advertisementData.localName == "BLE_URBANI" ||
+            d.device.name == "BLE_URBANI"),
+      );
+
+      setState(() {
+        estadoBLE = "Conectando a BLE_URBANI...";
+      });
+
+      await targetDevice.device.connect(autoConnect: false);
+
+      final servicios = await targetDevice.device.discoverServices();
+      final servicio = servicios.firstWhere(
+        (s) => s.uuid == Guid(serviceUUID),
+        orElse: () => throw Exception("Servicio no encontrado"),
+      );
+
+      final caracteristica = servicio.characteristics.firstWhere(
+        (c) => c.uuid == Guid(characteristicUUID),
+        orElse: () => throw Exception("Característica no encontrada"),
+      );
+
+      await caracteristica.setNotifyValue(true);
+      mensajesSubscription = caracteristica.onValueReceived.listen((value) {
+        final mensaje = String.fromCharCodes(value);
+        setState(() {
+          mensajesBLE.add(mensaje);
+          if (mensajesBLE.length > 10) mensajesBLE.removeAt(0);
+        });
+      });
+
+      setState(() {
+        dispositivoBLE = targetDevice.device;
+        estadoBLE = "✅ Conectado a BLE_URBANI";
+        estadoConexion = 'Conectado (${beaconsDelim.length} beacons)';
+        colorEstado = Colors.green;
+      });
+    } on TimeoutException catch (_) {
+      setState(() {
+        estadoBLE = "❌ BLE_URBANI no encontrado";
+      });
+    } catch (e) {
+      setState(() {
+        estadoBLE = "❌ Error: ${e.toString()}";
+      });
+    } finally {
+      _startScan();
+      setState(() {
+        isConnecting = false;
+      });
+    }
+  }
+
+  void _detenerConexionBLE() {
+    mensajesSubscription?.cancel();
+    dispositivoBLE?.disconnect();
+    dispositivoBLE = null;
+    caracteristicaNotificaciones = null;
+    setState(() {
+      mensajesBLE.clear();
+    });
   }
 
   Widget _buildBeaconList() {
@@ -137,7 +238,6 @@ class _CasetaPageState extends State<CasetaPage> {
             ? beacon.advertisementData.localName
             : beacon.device.name;
         final rssi = beacon.rssi;
-        final lastSeenTime = lastSeen[beacon.device.id.id] ?? DateTime.now();
 
         return ListTile(
           leading: CircleAvatar(
@@ -145,32 +245,49 @@ class _CasetaPageState extends State<CasetaPage> {
             child: Icon(Icons.bluetooth, color: Colors.white),
           ),
           title: Text(name),
-          subtitle: Text(beacon.device.id.id),
-          trailing: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(
-                '${rssi} dBm',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-              Text(
-                'Visto: ${lastSeenTime.hour}:${lastSeenTime.minute}:${lastSeenTime.second}',
-                style: TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-            ],
-          ),
+          subtitle: Text('${beacon.device.id.id} (${rssi} dBm)'),
+        );
+      },
+    );
+  }
+
+  Widget _buildMensajesBLE() {
+    if (mensajesBLE.isEmpty) {
+      return Center(
+        child: Text(
+          'No hay mensajes recibidos',
+          style: TextStyle(color: Colors.grey),
+        ),
+      );
+    }
+
+    return ListView.builder(
+      shrinkWrap: true,
+      itemCount: mensajesBLE.length,
+      itemBuilder: (context, index) {
+        return ListTile(
+          leading: Icon(Icons.message, color: Colors.blue),
+          title: Text(mensajesBLE[index]),
+          trailing: Text('${index + 1}/${mensajesBLE.length}'),
         );
       },
     );
   }
 
   Color _getSignalColor(int rssi) {
-    // Mientras más cercano a 0 (pero negativo), mejor señal
     if (rssi >= -50) return Colors.green;
     if (rssi >= -70) return Colors.blue;
     if (rssi >= -85) return Colors.orange;
     return Colors.red;
+  }
+
+  @override
+  void dispose() {
+    _beaconCheckTimer?.cancel();
+    _detenerConexionBLE();
+    scanSubscription?.cancel();
+    FlutterBluePlus.stopScan();
+    super.dispose();
   }
 
   @override
@@ -180,21 +297,44 @@ class _CasetaPageState extends State<CasetaPage> {
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.start,
           children: [
             Text(
               estadoConexion,
               style: TextStyle(
-                fontSize: 32,
+                fontSize: 24,
                 color: colorEstado,
                 fontWeight: FontWeight.bold,
               ),
             ),
-            const SizedBox(height: 20),
+            SizedBox(height: 10),
+            Text(
+              estadoBLE,
+              style: TextStyle(fontSize: 18, color: Colors.purple),
+            ),
+            SizedBox(height: 10),
+            Text(
+              'Beacons cercanos: ${beaconsDelim.length}',
+              style: TextStyle(fontSize: 16),
+            ),
+            SizedBox(height: 20),
+            if (dispositivoBLE != null) ...[
+              Text(
+                'Mensajes BLE:',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              Expanded(child: _buildMensajesBLE()),
+            ],
             Expanded(child: _buildBeaconList()),
           ],
         ),
       ),
     );
   }
+}
+
+class TimeoutException implements Exception {
+  final String message;
+  TimeoutException(this.message);
+  @override
+  String toString() => message;
 }
