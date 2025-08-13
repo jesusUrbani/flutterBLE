@@ -118,7 +118,7 @@ void setup() {
   
   connectToWiFi();
 
-  BLEDevice::init("Delim_BURBANI");
+  BLEDevice::init("BLE_URBANI");
   BLEServer* pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 
