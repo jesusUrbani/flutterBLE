@@ -42,6 +42,10 @@ class _CasetaPageState extends State<CasetaPage> {
   Map<String, int?> beaconLastHeartbeat = {};
   Map<String, int> currentBeaconHeartbeat = {};
 
+  // Guardar el último RSSI y cuándo cambió
+  Map<String, int> lastBeaconRssi = {};
+  Map<String, DateTime> lastRssiChange = {};
+
   @override
   void initState() {
     super.initState();
@@ -50,40 +54,16 @@ class _CasetaPageState extends State<CasetaPage> {
   }
 
   void _startBeaconMonitoring() {
-    _beaconCheckTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+    _beaconCheckTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       final now = DateTime.now();
 
-      beaconLastSeen.forEach((name, lastSeen) {
-        // Revisar si el beacon sigue enviando heartbeat
-        final lastHeartbeat = beaconLastHeartbeat[name];
-        final currentHeartbeat = currentBeaconHeartbeat[name];
-
-        if (lastHeartbeat != null &&
-            currentHeartbeat != null &&
-            lastHeartbeat == currentHeartbeat) {
-          // No cambió el heartbeat → posible beacon congelado
-          beaconMissCount[name] = (beaconMissCount[name] ?? 0) + 1;
-        } else {
-          // Cambió el heartbeat o es primera vez
-          beaconMissCount[name] = 0;
+      beaconLastSeen.removeWhere((name, lastSeen) {
+        // Eliminar si el RSSI no ha cambiado en más de 10 segundos
+        final lastChange = lastRssiChange[name];
+        if (lastChange != null && now.difference(lastChange).inSeconds > 20) {
+          return true;
         }
-
-        // Guardar heartbeat actual como "último"
-        beaconLastHeartbeat[name] = currentHeartbeat;
-
-        // Si además no lo hemos visto en X segundos, cuenta como fallo
-        if (now.difference(lastSeen).inSeconds >= 2) {
-          beaconMissCount[name] = (beaconMissCount[name] ?? 0) + 1;
-        }
-      });
-
-      // Eliminar solo si falla N veces seguidas
-      beaconMissCount.forEach((name, misses) {
-        if (misses >= 5) {
-          beaconLastSeen.remove(name);
-          beaconLastHeartbeat.remove(name);
-          currentBeaconHeartbeat.remove(name);
-        }
+        return false;
       });
 
       setState(() {
@@ -93,13 +73,6 @@ class _CasetaPageState extends State<CasetaPage> {
               : result.device.name;
           return beaconLastSeen.containsKey(name);
         }).toList();
-
-        if (dispositivoBLE != null && beaconsDelim.isEmpty) {
-          _detenerConexionBLE();
-          estadoBLE = "Desconectado (beacons perdidos)";
-          estadoConexion = 'Fuera de línea';
-          colorEstado = Colors.orange;
-        }
       });
     });
   }
@@ -109,32 +82,18 @@ class _CasetaPageState extends State<CasetaPage> {
         ? result.advertisementData.localName
         : result.device.name;
 
-    beaconLastSeen[name] = DateTime.now();
+    final rssi = result.rssi;
+    final now = DateTime.now();
 
-    // Extraer manufacturerData (segundo byte = heartbeat)
-    if (result.advertisementData.manufacturerData.isNotEmpty) {
-      final mfrBytes = result.advertisementData.manufacturerData.values.first;
-      if (mfrBytes.length >= 2) {
-        currentBeaconHeartbeat[name] = mfrBytes[1];
-      }
+    // Si es la primera vez o cambió el RSSI, actualizamos hora de cambio
+    if (!lastBeaconRssi.containsKey(name) || lastBeaconRssi[name] != rssi) {
+      lastRssiChange[name] = now;
+      lastBeaconRssi[name] = rssi;
     }
+
+    beaconLastSeen[name] = now; // Seguimos registrando última detección
   }
 
-  /*
-  void _startBeaconMonitoring() {
-    _beaconCheckTimer = Timer.periodic(Duration(seconds: 2), (timer) {
-      // Si hay conexión BLE pero menos de 2 beacons, desconectar
-      if (dispositivoBLE != null && beaconsDelim.length < 2) {
-        _detenerConexionBLE();
-        setState(() {
-          estadoBLE = "Desconectado (beacons perdidos)";
-          estadoConexion = 'Fuera de línea';
-          colorEstado = Colors.orange;
-        });
-      }
-    });
-  }
-*/
   Future<void> _checkPermissionsAndBluetooth() async {
     await [
       Permission.bluetoothScan,
