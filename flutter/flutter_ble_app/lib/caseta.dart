@@ -22,6 +22,8 @@ class _CasetaPageState extends State<CasetaPage> {
   String estadoBLE = "";
   List<String> mensajesBLE = [];
 
+  Map<String, DateTime> beaconLastSeen = {};
+
   // Variables de escaneo BLE
   bool _bluetoothOn = false;
   bool isScanning = false;
@@ -40,11 +42,12 @@ class _CasetaPageState extends State<CasetaPage> {
   void initState() {
     super.initState();
     _checkPermissionsAndBluetooth();
-    _startBeaconCheckTimer();
+    _startBeaconMonitoring();
   }
 
-  void _startBeaconCheckTimer() {
-    _beaconCheckTimer = Timer.periodic(Duration(seconds: 3), (timer) {
+  void _startBeaconMonitoring() {
+    _beaconCheckTimer = Timer.periodic(Duration(seconds: 2), (timer) {
+      // Si hay conexión BLE pero menos de 2 beacons, desconectar
       if (dispositivoBLE != null && beaconsDelim.length < 2) {
         _detenerConexionBLE();
         setState(() {
@@ -52,8 +55,6 @@ class _CasetaPageState extends State<CasetaPage> {
           estadoConexion = 'Fuera de línea';
           colorEstado = Colors.orange;
         });
-      } else if (dispositivoBLE == null && beaconsDelim.length >= 2) {
-        _conectarABleUrbani();
       }
     });
   }
@@ -98,25 +99,26 @@ class _CasetaPageState extends State<CasetaPage> {
     isScanning = true;
 
     scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+      // Filtrar SOLO lo que viene en el paquete actual
       final currentBeacons = results.where((result) {
         final name = result.advertisementData.localName.isNotEmpty
             ? result.advertisementData.localName
             : result.device.name;
+
         return name.startsWith('Delim') &&
             result.rssi >= -100 &&
             result.rssi <= -1;
       }).toList();
 
+      // Actualizar estado y lista en base al paquete recibido
       setState(() {
         beaconsDelim = currentBeacons;
-      });
 
-      setState(() {
         if (!_bluetoothOn) {
           estadoConexion = 'Sin conexión';
           colorEstado = Colors.black;
         } else if (dispositivoBLE != null) {
-          estadoConexion = 'Conectado (${beaconsDelim.length} beacons)';
+          estadoConexion = 'Conectado a BLE_URBANI';
           colorEstado = Colors.green;
         } else if (beaconsDelim.isNotEmpty) {
           estadoConexion = 'Beacons detectados: ${beaconsDelim.length}';
@@ -130,7 +132,8 @@ class _CasetaPageState extends State<CasetaPage> {
   }
 
   Future<void> _conectarABleUrbani() async {
-    if (isConnecting || dispositivoBLE != null) return;
+    if (isConnecting || dispositivoBLE != null || beaconsDelim.length < 2)
+      return;
 
     setState(() {
       isConnecting = true;
@@ -268,7 +271,6 @@ class _CasetaPageState extends State<CasetaPage> {
         return ListTile(
           leading: Icon(Icons.message, color: Colors.blue),
           title: Text(mensajesBLE[index]),
-          trailing: Text('${index + 1}/${mensajesBLE.length}'),
         );
       },
     );
@@ -311,11 +313,31 @@ class _CasetaPageState extends State<CasetaPage> {
               estadoBLE,
               style: TextStyle(fontSize: 18, color: Colors.purple),
             ),
+            SizedBox(height: 20),
+            // Botón de conexión (solo visible cuando hay ≥2 beacons y no está conectado)
+            if (beaconsDelim.length >= 2 && dispositivoBLE == null)
+              ElevatedButton(
+                onPressed: _conectarABleUrbani,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  padding: EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                ),
+                child: Text(
+                  'Conectar a BLE_URBANI',
+                  style: TextStyle(fontSize: 18),
+                ),
+              ),
             SizedBox(height: 10),
-            Text(
-              'Beacons cercanos: ${beaconsDelim.length}',
-              style: TextStyle(fontSize: 16),
-            ),
+            // Botón de desconexión (solo visible cuando está conectado)
+            if (dispositivoBLE != null)
+              ElevatedButton(
+                onPressed: _detenerConexionBLE,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red,
+                  padding: EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                ),
+                child: Text('Desconectar', style: TextStyle(fontSize: 18)),
+              ),
             SizedBox(height: 20),
             if (dispositivoBLE != null) ...[
               Text(
@@ -324,6 +346,11 @@ class _CasetaPageState extends State<CasetaPage> {
               ),
               Expanded(child: _buildMensajesBLE()),
             ],
+            Text(
+              'Beacons detectados:',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 10),
             Expanded(child: _buildBeaconList()),
           ],
         ),
