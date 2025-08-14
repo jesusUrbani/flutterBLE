@@ -38,6 +38,10 @@ class _CasetaPageState extends State<CasetaPage> {
   final String serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
   final String characteristicUUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
 
+  Map<String, int> beaconMissCount = {};
+  Map<String, int?> beaconLastHeartbeat = {};
+  Map<String, int> currentBeaconHeartbeat = {};
+
   @override
   void initState() {
     super.initState();
@@ -45,6 +49,78 @@ class _CasetaPageState extends State<CasetaPage> {
     _startBeaconMonitoring();
   }
 
+  void _startBeaconMonitoring() {
+    _beaconCheckTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
+      final now = DateTime.now();
+
+      beaconLastSeen.forEach((name, lastSeen) {
+        // Revisar si el beacon sigue enviando heartbeat
+        final lastHeartbeat = beaconLastHeartbeat[name];
+        final currentHeartbeat = currentBeaconHeartbeat[name];
+
+        if (lastHeartbeat != null &&
+            currentHeartbeat != null &&
+            lastHeartbeat == currentHeartbeat) {
+          // No cambió el heartbeat → posible beacon congelado
+          beaconMissCount[name] = (beaconMissCount[name] ?? 0) + 1;
+        } else {
+          // Cambió el heartbeat o es primera vez
+          beaconMissCount[name] = 0;
+        }
+
+        // Guardar heartbeat actual como "último"
+        beaconLastHeartbeat[name] = currentHeartbeat;
+
+        // Si además no lo hemos visto en X segundos, cuenta como fallo
+        if (now.difference(lastSeen).inSeconds >= 2) {
+          beaconMissCount[name] = (beaconMissCount[name] ?? 0) + 1;
+        }
+      });
+
+      // Eliminar solo si falla N veces seguidas
+      beaconMissCount.forEach((name, misses) {
+        if (misses >= 5) {
+          beaconLastSeen.remove(name);
+          beaconLastHeartbeat.remove(name);
+          currentBeaconHeartbeat.remove(name);
+        }
+      });
+
+      setState(() {
+        beaconsDelim = beaconsDelim.where((result) {
+          final name = result.advertisementData.localName.isNotEmpty
+              ? result.advertisementData.localName
+              : result.device.name;
+          return beaconLastSeen.containsKey(name);
+        }).toList();
+
+        if (dispositivoBLE != null && beaconsDelim.isEmpty) {
+          _detenerConexionBLE();
+          estadoBLE = "Desconectado (beacons perdidos)";
+          estadoConexion = 'Fuera de línea';
+          colorEstado = Colors.orange;
+        }
+      });
+    });
+  }
+
+  void _onBeaconDetected(ScanResult result) {
+    final name = result.advertisementData.localName.isNotEmpty
+        ? result.advertisementData.localName
+        : result.device.name;
+
+    beaconLastSeen[name] = DateTime.now();
+
+    // Extraer manufacturerData (segundo byte = heartbeat)
+    if (result.advertisementData.manufacturerData.isNotEmpty) {
+      final mfrBytes = result.advertisementData.manufacturerData.values.first;
+      if (mfrBytes.length >= 2) {
+        currentBeaconHeartbeat[name] = mfrBytes[1];
+      }
+    }
+  }
+
+  /*
   void _startBeaconMonitoring() {
     _beaconCheckTimer = Timer.periodic(Duration(seconds: 2), (timer) {
       // Si hay conexión BLE pero menos de 2 beacons, desconectar
@@ -58,7 +134,7 @@ class _CasetaPageState extends State<CasetaPage> {
       }
     });
   }
-
+*/
   Future<void> _checkPermissionsAndBluetooth() async {
     await [
       Permission.bluetoothScan,
@@ -99,8 +175,9 @@ class _CasetaPageState extends State<CasetaPage> {
     isScanning = true;
 
     scanSubscription = FlutterBluePlus.scanResults.listen((results) {
-      // Filtrar SOLO lo que viene en el paquete actual
-      final currentBeacons = results.where((result) {
+      final now = DateTime.now();
+
+      final detectedNow = results.where((result) {
         final name = result.advertisementData.localName.isNotEmpty
             ? result.advertisementData.localName
             : result.device.name;
@@ -110,9 +187,29 @@ class _CasetaPageState extends State<CasetaPage> {
             result.rssi <= -1;
       }).toList();
 
-      // Actualizar estado y lista en base al paquete recibido
+      // Registrar última vez visto usando el nombre como clave
+      /*
+      for (var beacon in detectedNow) {
+        final name = beacon.advertisementData.localName.isNotEmpty
+            ? beacon.advertisementData.localName
+            : beacon.device.name;
+        beaconLastSeen[name] = now;
+      }*/
+      for (var beacon in detectedNow) {
+        _onBeaconDetected(beacon);
+      }
+
+      // Construir lista solo con los que llevan menos de 5 segundos sin verse
+      final activeBeacons = results.where((result) {
+        final name = result.advertisementData.localName.isNotEmpty
+            ? result.advertisementData.localName
+            : result.device.name;
+        final lastSeen = beaconLastSeen[name];
+        return lastSeen != null && now.difference(lastSeen).inSeconds < 5;
+      }).toList();
+
       setState(() {
-        beaconsDelim = currentBeacons;
+        beaconsDelim = activeBeacons;
 
         if (!_bluetoothOn) {
           estadoConexion = 'Sin conexión';
@@ -121,7 +218,7 @@ class _CasetaPageState extends State<CasetaPage> {
           estadoConexion = 'Conectado a BLE_URBANI';
           colorEstado = Colors.green;
         } else if (beaconsDelim.isNotEmpty) {
-          estadoConexion = 'Beacons detectados: ${beaconsDelim.length}';
+          estadoConexion = 'Beacons activos: ${beaconsDelim.length}';
           colorEstado = Colors.blue;
         } else {
           estadoConexion = 'Fuera de línea';
