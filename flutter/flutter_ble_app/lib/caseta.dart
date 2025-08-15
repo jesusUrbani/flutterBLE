@@ -269,13 +269,25 @@ class _CasetaPageState extends State<CasetaPage> {
   }
 
   void _detenerConexionBLE() {
-    mensajesSubscription?.cancel();
     dispositivoBLE?.disconnect();
     dispositivoBLE = null;
-    caracteristicaNotificaciones = null;
+
+    // Limpiar listas de beacons
+    beaconsDelim.clear();
+    beaconLastSeen.clear();
+    beaconMissCount.clear();
+    lastBeaconRssi.clear();
+    lastRssiChange.clear();
+
+    // Actualizar estado
     setState(() {
-      mensajesBLE.clear();
+      estadoBLE = "Desconectado";
+      estadoConexion = 'Fuera de línea';
+      colorEstado = Colors.orange;
     });
+
+    // Reiniciar búsqueda de beacons
+    _startScan();
   }
 
   Widget _buildBeaconList() {
