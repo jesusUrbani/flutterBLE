@@ -100,7 +100,7 @@ void connectToWiFi() {
   if(WiFi.status() != WL_CONNECTED) {
     Serial.println("\nFallo en conexión WiFi");
     digitalWrite(wifiLedPin, LOW);
-    ESP.restart();
+    //ESP.restart();
   } else {
     digitalWrite(wifiLedPin, HIGH); // Enciende LED cuando conectado
     Serial.println("\nWiFi conectado");
