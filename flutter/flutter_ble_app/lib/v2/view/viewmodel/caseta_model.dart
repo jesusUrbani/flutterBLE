@@ -20,6 +20,7 @@ class CasetaViewModel {
   Timer? _beaconCheckTimer;
   StreamSubscription<List<int>>? mensajesSubscription;
   BluetoothCharacteristic? caracteristicaNotificaciones;
+  double saldo = 100.0; // Agregar saldo inicial
 
   // UUIDs
   final String serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
@@ -42,6 +43,22 @@ class CasetaViewModel {
   Future<void> init() async {
     await _checkPermissionsAndBluetooth();
     _startBeaconMonitoring();
+  }
+
+  // Método para realizar un pago
+  void realizarPago(double monto) {
+    if (saldo >= monto) {
+      saldo -= monto;
+      mensajesBLE.add('Pago realizado: \$${monto.toStringAsFixed(2)}');
+      mensajesBLE.add('Saldo restante: \$${saldo.toStringAsFixed(2)}');
+      notifyStateChanged();
+      detenerConexionBLE();
+    } else {
+      mensajesBLE.add(
+        'Saldo insuficiente para pagar \$${monto.toStringAsFixed(2)}',
+      );
+      notifyStateChanged();
+    }
   }
 
   void _startBeaconMonitoring() {
@@ -378,7 +395,7 @@ class CasetaViewModel {
                 beaconsDelim.length >= 2) {
               // Validar que hay al menos 2 beacons
               _conectarAutomaticamente();
-            } else {
+            } /*else {
               estadoBLE = "⚠️ Esperando suficientes beacons para reconectar...";
               notifyStateChanged();
               // Reiniciar el escaneo después de 10 segundos
@@ -391,7 +408,7 @@ class CasetaViewModel {
                   _reiniciarEscaneo();
                 }
               });
-            }
+            }*/
           });
         }
       });
