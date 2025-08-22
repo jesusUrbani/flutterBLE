@@ -32,6 +32,9 @@ class CasetaViewModel {
 
   CasetaViewModel({this.onStateChanged});
 
+  Timer? _reconexionTimer;
+  bool _reconexionPendiente = false;
+
   void notifyStateChanged() {
     onStateChanged?.call(null);
   }
@@ -96,6 +99,10 @@ class CasetaViewModel {
         colorEstado = Colors.black;
         beaconsDelim.clear();
         estadoBLE = "Bluetooth apagado";
+      } else {
+        // Cuando el Bluetooth se enciende, reiniciar el escaneo
+        _reiniciarEscaneo();
+        estadoBLE = "Bluetooth activado, escaneando...";
       }
       notifyStateChanged();
 
@@ -114,6 +121,14 @@ class CasetaViewModel {
   }
 
   void _startScan() {
+    // Limpiar listas y mapas de beacons para forzar un nuevo escaneo fresco
+
+    beaconsDelim.clear();
+    beaconLastSeen.clear();
+    lastBeaconRssi.clear();
+    lastRssiChange.clear();
+    mensajesBLE.clear();
+
     FlutterBluePlus.startScan(
       androidScanMode: AndroidScanMode.lowLatency,
       oneByOne: false,
@@ -147,6 +162,22 @@ class CasetaViewModel {
 
       beaconsDelim = activeBeacons;
 
+      // lógica: Conectar automáticamente cuando hay suficientes beacons (2 o más)
+      if (beaconsDelim.length >= 2 && // Cambiado de >= 1 a >= 2
+          dispositivoBLE == null &&
+          !isConnecting &&
+          !_reconexionPendiente &&
+          _bluetoothOn) {
+        _reconexionPendiente = true;
+        estadoBLE = "Múltiples beacons detectados, conectando...";
+        notifyStateChanged();
+
+        _reconexionTimer = Timer(Duration(seconds: 2), () {
+          _reconexionPendiente = false;
+          _conectarAutomaticamente();
+        });
+      }
+
       if (!_bluetoothOn) {
         estadoConexion = 'Sin conexión';
         colorEstado = Colors.black;
@@ -165,9 +196,136 @@ class CasetaViewModel {
     });
   }
 
-  Future<void> conectarABleUrbani() async {
-    if (isConnecting || dispositivoBLE != null || beaconsDelim.length < 2)
+  // función para la conexión automática
+  Future<void> _conectarAutomaticamente() async {
+    // Verificar que todavía hay al menos 2 beacons antes de conectar
+    if (beaconsDelim.length < 2) {
+      estadoBLE =
+          "Beacons insuficientes para conectar (${beaconsDelim.length})";
+      isConnecting = false;
+      _reiniciarEscaneo();
+      notifyStateChanged();
       return;
+    }
+
+    if (isConnecting || dispositivoBLE != null) return;
+
+    isConnecting = true;
+    estadoBLE = "Conectando a BLE_URBANI...";
+    notifyStateChanged();
+
+    try {
+      await FlutterBluePlus.stopScan();
+      isScanning = false;
+
+      // Buscar dispositivo BLE_URBANI
+      final dispositivos = await FlutterBluePlus.scanResults.firstWhere(
+        (results) => results.any((device) {
+          final name = device.advertisementData.localName.isNotEmpty
+              ? device.advertisementData.localName
+              : device.device.name;
+          return name == "BLE_URBANI";
+        }),
+        orElse: () => [],
+      );
+
+      if (dispositivos.isEmpty) {
+        estadoBLE = "BLE_URBANI no encontrado";
+        _reiniciarEscaneo();
+        isConnecting = false;
+        notifyStateChanged();
+        return;
+      }
+
+      final targetDevice = dispositivos.firstWhere(
+        (d) =>
+            (d.advertisementData.localName == "BLE_URBANI" ||
+            d.device.name == "BLE_URBANI"),
+      );
+
+      estadoBLE = "Conectando a BLE_URBANI...";
+      notifyStateChanged();
+
+      await targetDevice.device.connect(autoConnect: false);
+
+      targetDevice.device.connectionState.listen((state) {
+        if (state == BluetoothConnectionState.disconnected) {
+          estadoBLE = "🔌 Desconectado, reintentando...";
+          dispositivoBLE = null;
+          isConnecting = false;
+
+          notifyStateChanged();
+
+          // Reiniciar escaneo
+          _reiniciarEscaneo();
+
+          // Esperar unos segundos y validar beacons antes de reconectar
+          Future.delayed(Duration(seconds: 3), () {
+            if (_bluetoothOn &&
+                dispositivoBLE == null &&
+                beaconsDelim.length >= 2) {
+              // Validar que hay al menos 2 beacons
+              _conectarAutomaticamente();
+            } /*else {
+              estadoBLE = "⚠️ Esperando suficientes beacons para reconectar...";
+
+              notifyStateChanged();
+              // Reiniciar el escaneo después de 5 segundos
+              Future.delayed(Duration(seconds: 5), () {
+                if (_bluetoothOn &&
+                    dispositivoBLE == null &&
+                    beaconsDelim.length < 2) {
+                  estadoBLE = "Reiniciando escaneo...123";
+                  notifyStateChanged();
+                  _reiniciarEscaneo();
+                }
+              });
+            }*/
+          });
+        }
+      });
+
+      final servicios = await targetDevice.device.discoverServices();
+      final servicio = servicios.firstWhere(
+        (s) => s.uuid == Guid(serviceUUID),
+        orElse: () => throw Exception("Servicio no encontrado"),
+      );
+
+      final caracteristica = servicio.characteristics.firstWhere(
+        (c) => c.uuid == Guid(characteristicUUID),
+        orElse: () => throw Exception("Característica no encontrada"),
+      );
+
+      await caracteristica.setNotifyValue(true);
+      mensajesSubscription = caracteristica.onValueReceived.listen((value) {
+        final mensaje = String.fromCharCodes(value);
+        mensajesBLE.add(mensaje);
+        if (mensajesBLE.length > 10) mensajesBLE.removeAt(0);
+        notifyStateChanged();
+      });
+
+      dispositivoBLE = targetDevice.device;
+      estadoBLE = "✅ Conectado automáticamente a BLE_URBANI";
+      estadoConexion = 'Conectado (${beaconsDelim.length} beacons)';
+      colorEstado = Colors.green;
+      notifyStateChanged();
+    } catch (e) {
+      estadoBLE = "❌ Error en conexión automática: ${e.toString()}";
+      _reiniciarEscaneo();
+      isConnecting = false;
+      notifyStateChanged();
+    }
+  }
+
+  Future<void> conectarABleUrbani() async {
+    // Verificar que hay al menos 2 beacons
+    if (beaconsDelim.length < 2) {
+      estadoBLE = "Se necesitan al menos 2 beacons para conectar";
+      notifyStateChanged();
+      return;
+    }
+
+    if (isConnecting || dispositivoBLE != null) return;
 
     isConnecting = true;
     estadoBLE = "Buscando BLE_URBANI...";
@@ -201,6 +359,42 @@ class CasetaViewModel {
       notifyStateChanged();
 
       await targetDevice.device.connect(autoConnect: false);
+
+      targetDevice.device.connectionState.listen((state) {
+        if (state == BluetoothConnectionState.disconnected) {
+          estadoBLE = "🔌 Desconectado, reintentando...";
+          dispositivoBLE = null;
+          isConnecting = false;
+
+          notifyStateChanged();
+
+          // Reiniciar escaneo
+          _reiniciarEscaneo();
+
+          // Esperar unos segundos y validar beacons antes de reconectar
+          Future.delayed(Duration(seconds: 3), () {
+            if (_bluetoothOn &&
+                dispositivoBLE == null &&
+                beaconsDelim.length >= 2) {
+              // Validar que hay al menos 2 beacons
+              _conectarAutomaticamente();
+            } else {
+              estadoBLE = "⚠️ Esperando suficientes beacons para reconectar...";
+              notifyStateChanged();
+              // Reiniciar el escaneo después de 10 segundos
+              Future.delayed(Duration(seconds: 10), () {
+                if (_bluetoothOn &&
+                    dispositivoBLE == null &&
+                    beaconsDelim.length < 2) {
+                  estadoBLE = "Reiniciando escaneo...";
+                  notifyStateChanged();
+                  _reiniciarEscaneo();
+                }
+              });
+            }
+          });
+        }
+      });
 
       final servicios = await targetDevice.device.discoverServices();
       final servicio = servicios.firstWhere(
@@ -240,18 +434,50 @@ class CasetaViewModel {
   }
 
   void detenerConexionBLE() {
+    // Cancelar cualquier reconexión pendiente
+    _reconexionTimer?.cancel();
+    _reconexionPendiente = false;
+
+    // Cancelar la suscripción a mensajes BLE
+    mensajesSubscription?.cancel();
+    mensajesSubscription = null;
+    caracteristicaNotificaciones = null;
+
+    // Desconectar el dispositivo
     dispositivoBLE?.disconnect();
     dispositivoBLE = null;
+
+    // Limpiar listas y mapas
     beaconsDelim.clear();
     beaconLastSeen.clear();
     lastBeaconRssi.clear();
     lastRssiChange.clear();
+    mensajesBLE.clear();
 
-    estadoBLE = "Desconectado";
-    estadoConexion = 'Fuera de línea';
+    // Actualizar estado
+    estadoBLE = "Desconectado de BLE_URBANI";
+    estadoConexion = 'Fuera de línea después de desconectar';
     colorEstado = Colors.orange;
+
+    // Notificar cambios
     notifyStateChanged();
 
+    // Reiniciar el escaneo con un pequeño delay para asegurar la desconexión
+    Future.delayed(Duration(milliseconds: 500), () {
+      _reiniciarEscaneo();
+    });
+  }
+
+  // Añade este método para reiniciar el escaneo
+  void _reiniciarEscaneo() {
+    // Detener el escaneo actual si está activo
+    if (isScanning) {
+      FlutterBluePlus.stopScan();
+      scanSubscription?.cancel();
+      isScanning = false;
+    }
+
+    // Reiniciar el escaneo
     _startScan();
   }
 
@@ -264,6 +490,7 @@ class CasetaViewModel {
 
   void dispose() {
     _beaconCheckTimer?.cancel();
+    _reconexionTimer?.cancel();
     detenerConexionBLE();
     scanSubscription?.cancel();
     FlutterBluePlus.stopScan();

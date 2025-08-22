@@ -49,19 +49,11 @@ class _CasetaPageState extends State<CasetaPage> {
               style: TextStyle(fontSize: 18, color: Colors.purple),
             ),
             SizedBox(height: 20),
+            // Botón para iniciar el escaneo de ble
             if (_viewModel.beaconsDelim.length >= 2 &&
                 _viewModel.dispositivoBLE == null)
-              ElevatedButton(
-                onPressed: _viewModel.conectarABleUrbani,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
-                  padding: EdgeInsets.symmetric(horizontal: 30, vertical: 15),
-                ),
-                child: Text(
-                  'Conectar a BLE_URBANI',
-                  style: TextStyle(fontSize: 18),
-                ),
-              ),
+              Container(), // Ya no mostramos el botón de conexión manual
+
             SizedBox(height: 10),
             if (_viewModel.dispositivoBLE != null)
               ElevatedButton(
