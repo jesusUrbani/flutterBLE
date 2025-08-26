@@ -22,14 +22,112 @@ const int wifiLedPin = 2; // GPIO2 (LED integrado en muchas placas ESP32)
 
 BLECharacteristic* pCharacteristic;
 bool deviceConnected = false;
+String receivedIdDispositivo = "";
+String receivedNombreEntrada = "";
 
-void registrarConexionBLE();
+// Función para enviar mensaje de respuesta a través de BLE
+void enviarRespuestaBLE(const String& mensaje) {
+  if (deviceConnected) {
+    pCharacteristic->setValue(mensaje.c_str());
+    pCharacteristic->notify();
+    Serial.print("Respuesta BLE enviada: ");
+    Serial.println(mensaje);
+  } else {
+    Serial.println("Dispositivo no conectado, no se puede enviar respuesta BLE");
+  }
+}
+
+// Callback para manejar escrituras en la característica BLE
+class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic* pCharacteristic) {
+    String value = pCharacteristic->getValue().c_str();
+    
+    if (value.length() > 0) {
+      Serial.print("Datos recibidos via BLE: ");
+      Serial.println(value.c_str());
+      
+      // Parsear los datos recibidos (formato esperado: "id_dispositivo;nombre_entrada")
+      String data = String(value.c_str());
+      int separatorIndex = data.indexOf(';');
+      
+      if (separatorIndex != -1) {
+        receivedIdDispositivo = data.substring(0, separatorIndex);
+        receivedNombreEntrada = data.substring(separatorIndex + 1);
+        
+        Serial.print("ID Dispositivo: ");
+        Serial.println(receivedIdDispositivo);
+        Serial.print("Nombre Entrada: ");
+        Serial.println(receivedNombreEntrada);
+        
+        // Enviar datos a la API solo si ambos campos están presentes
+        if (receivedIdDispositivo.length() > 0 && receivedNombreEntrada.length() > 0) {
+          registrarConexionBLE();
+        } else {
+          enviarRespuestaBLE("ERROR: Campos vacíos");
+        }
+      } else {
+        enviarRespuestaBLE("ERROR: Formato incorrecto. Usar: id;nombre");
+      }
+    }
+  }
+};
+
+void registrarConexionBLE() {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(apiUrl);
+    http.addHeader("Content-Type", "application/json");
+
+    StaticJsonDocument<200> doc;
+    doc["id_dispositivo"] = receivedIdDispositivo;
+    doc["nombre_entrada"] = receivedNombreEntrada;
+
+    String jsonBody;
+    serializeJson(doc, jsonBody);
+
+    Serial.print("Enviando a API: ");
+    Serial.println(jsonBody);
+
+    int httpCode = http.POST(jsonBody);
+    String responsePayload = "N/A";
+
+    if (httpCode > 0) {
+      responsePayload = http.getString();
+      Serial.print("Registrado en API. Código: ");
+      Serial.println(httpCode);
+      Serial.print("Respuesta: ");
+      Serial.println(responsePayload);
+      
+      // Enviar respuesta exitosa por BLE
+      String mensajeExito = "SUCCESS: Código " + String(httpCode) + " - " + responsePayload;
+      enviarRespuestaBLE(mensajeExito);
+      
+    } else {
+      Serial.print("Fallo en POST. Código: ");
+      Serial.println(httpCode);
+      
+      // Enviar error por BLE
+      String mensajeError = "ERROR: Fallo HTTP - Código " + String(httpCode);
+      enviarRespuestaBLE(mensajeError);
+    }
+
+    http.end();
+    
+    // Limpiar los datos después de enviarlos
+    receivedIdDispositivo = "";
+    receivedNombreEntrada = "";
+    
+  } else {
+    Serial.println("WiFi no conectado, no se puede enviar a API");
+    enviarRespuestaBLE("ERROR: WiFi desconectado");
+  }
+}
 
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
     deviceConnected = true;
     Serial.println("Conectado BLE");
-    registrarConexionBLE();
+    enviarRespuestaBLE("Conectado. Enviar: id;nombre");
   }
 
   void onDisconnect(BLEServer* pServer) {
@@ -41,35 +139,6 @@ class MyServerCallbacks : public BLEServerCallbacks {
     Serial.println("Reanudando publicidad BLE");
   }
 };
-
-void registrarConexionBLE() {
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    http.begin(apiUrl);
-    http.addHeader("Content-Type", "application/json");
-
-    StaticJsonDocument<200> doc;
-    doc["id_dispositivo"] = "ESP32-URBANI";
-    doc["nombre_entrada"] = "BLE conectado";
-
-    String jsonBody;
-    serializeJson(doc, jsonBody);
-
-    int httpCode = http.POST(jsonBody);
-
-    if (httpCode > 0) {
-      Serial.print("Registrado en API. Código: ");
-      Serial.println(httpCode);
-    } else {
-      Serial.print("Fallo en POST. Código: ");
-      Serial.println(httpCode);
-    }
-
-    http.end();
-  } else {
-    Serial.println("WiFi no conectado");
-  }
-}
 
 void connectToWiFi() {
   if(WiFi.status() == WL_CONNECTED) {
@@ -100,7 +169,6 @@ void connectToWiFi() {
   if(WiFi.status() != WL_CONNECTED) {
     Serial.println("\nFallo en conexión WiFi");
     digitalWrite(wifiLedPin, LOW);
-    //ESP.restart();
   } else {
     digitalWrite(wifiLedPin, HIGH); // Enciende LED cuando conectado
     Serial.println("\nWiFi conectado");
@@ -131,12 +199,16 @@ void setup() {
     BLECharacteristic::PROPERTY_NOTIFY
   );
 
+  // Añadir callback para manejar escrituras
+  pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
+  
   pCharacteristic->addDescriptor(new BLE2902());
-  pCharacteristic->setValue("Hola");
+  pCharacteristic->setValue("Listo. Enviar: id;nombre");
 
   pService->start();
   BLEDevice::getAdvertising()->start();
   Serial.println("Esperando conexión BLE...");
+  Serial.println("Formato esperado: id_dispositivo;nombre_entrada");
 }
 
 void loop() {
@@ -155,12 +227,13 @@ void loop() {
     }
   }
 
+  // Notificaciones periódicas (opcional, puedes comentar si no las necesitas)
   if (deviceConnected) {
     static unsigned long lastTime = 0;
-    if (millis() - lastTime > 2000) {
+    if (millis() - lastTime > 10000) { // Reducido a 10 segundos para menos spam
       lastTime = millis();
-      char mensaje[32];
-      snprintf(mensaje, sizeof(mensaje), "Msg %lu", millis() / 1000);
+      char mensaje[50];
+      snprintf(mensaje, sizeof(mensaje), "Dispositivo activo - %lu", millis() / 1000);
       pCharacteristic->setValue(mensaje);
       pCharacteristic->notify();
       Serial.print("Notificando: ");

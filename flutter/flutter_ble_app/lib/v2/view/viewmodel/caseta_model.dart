@@ -26,6 +26,10 @@ class CasetaViewModel {
   final String serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
   final String characteristicUUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
 
+  // Variables para los datos a enviar por BLE
+  final String idDispositivo = "ESP32-URBANI";
+  final String nombreEntrada = "Entrada Principal";
+
   Map<String, int> lastBeaconRssi = {};
   Map<String, DateTime> lastRssiChange = {};
 
@@ -46,18 +50,60 @@ class CasetaViewModel {
   }
 
   // Método para realizar un pago
-  void realizarPago(double monto) {
+  Future<void> realizarPago(double monto) async {
     if (saldo >= monto) {
       saldo -= monto;
       mensajesBLE.add('Pago realizado: \$${monto.toStringAsFixed(2)}');
       mensajesBLE.add('Saldo restante: \$${saldo.toStringAsFixed(2)}');
       notifyStateChanged();
+      // Enviar datos por BLE después del pago
+      await _enviarDatosPorBLE();
+
       // Solo desconectamos después del pago pero mantenemos el escaneo
       _reiniciarValidacionBeacons();
     } else {
       mensajesBLE.add(
         'Saldo insuficiente para pagar \$${monto.toStringAsFixed(2)}',
       );
+      notifyStateChanged();
+    }
+  }
+
+  // Método para enviar datos por BLE
+  Future<void> _enviarDatosPorBLE() async {
+    if (dispositivoBLE == null) {
+      mensajesBLE.add('No hay conexión BLE para enviar datos');
+      notifyStateChanged();
+      return;
+    }
+
+    try {
+      // Formato: "id_dispositivo;nombre_entrada"
+      final datos = '$idDispositivo;$nombreEntrada';
+      final bytes = datos.codeUnits;
+
+      // Buscar la característica para escribir
+      final servicios = await dispositivoBLE!.discoverServices();
+      final servicio = servicios.firstWhere(
+        (s) => s.uuid == Guid(serviceUUID),
+        orElse: () => throw Exception("Servicio no encontrado"),
+      );
+
+      final caracteristica = servicio.characteristics.firstWhere(
+        (c) => c.uuid == Guid(characteristicUUID),
+        orElse: () => throw Exception("Característica no encontrada"),
+      );
+
+      // Escribir en la característica BLE
+      await caracteristica.write(bytes, withoutResponse: false);
+
+      mensajesBLE.add('Datos enviados por BLE: $datos');
+      notifyStateChanged();
+
+      // Opcional: Esperar un breve momento para asegurar que el envío se complete
+      await Future.delayed(Duration(milliseconds: 500));
+    } catch (e) {
+      mensajesBLE.add('Error al enviar datos por BLE: ${e.toString()}');
       notifyStateChanged();
     }
   }
