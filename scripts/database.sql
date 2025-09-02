@@ -267,9 +267,16 @@ CALL sp_finalizar_ingresoBLE('USR_003');
 -- Retorna: id_ingreso, id_usuario, total_pagado, estado
 
 -- USR_001 tiene dos ingresos activos, finaliza el más reciente (Sur)
-CALL sp_finalizar_ingresoBLE('USR_001');
+CALL sp_finalizar_ingresoBLE('USR_123');
 -- Retorna: id_ingreso del ingreso en Sur
+   UPDATE registros_ingresoBLE 
+    SET estado = 'EN_CURSO'
+    WHERE id_usuario = 'USR_123';
 
+SELECT * FROM zona;
+
+
+SELECT * FROM dispositivos;
 
 
 -- Ver ingresos BLE
