@@ -2,7 +2,7 @@ const pool = require('../config/db');
 const axios = require('axios'); // Necesitarás instalar axios: npm install axios
 
 // Configuración del ESP32 (ajusta con la IP correcta de tu ESP32)
-const ESP32_IP = 'http://192.168.31.201'; // Cambia por la IP real de tu ESP32
+const ESP32_IP = 'http://192.168.0.252'; // Cambia por la IP real de tu ESP32
 const ESP32_ENDPOINT = '/activate-led';
 
 
@@ -74,6 +74,23 @@ exports.deleteRegistro = async (req, res) => {
         }
         
         res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+};
+
+exports.createPlaca = async (req, res) => {
+    try {
+        const { id_dispositivo, placas } = req.body;
+        if (!id_dispositivo || !placas) {
+            return res.status(400).json({ error: 'id_dispositivo y placas son requeridos' });
+        }
+        const [result] = await pool.query(
+            'INSERT INTO registros_placas (id_dispositivo, placas) VALUES (?, ?)',
+            [id_dispositivo, placas]
+        );
+        const [newPlaca] = await pool.query('SELECT * FROM registros_placas WHERE id = ?', [result.insertId]);
+        res.status(201).json(newPlaca[0]);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
