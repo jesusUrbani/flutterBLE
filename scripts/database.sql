@@ -203,9 +203,9 @@ DELIMITER ;
 
 -- Insertar zonas
 INSERT INTO zona (id_zona, nombre_zona) VALUES 
-('ZONA_NORTE', 'Estacionamiento Norte'),
-('ZONA_SUR', 'Estacionamiento Sur'),
-('ZONA_CENTRO', 'Edificio Central');
+('ZONA_NORTE', 'Carretera colombia'),
+('ZONA_SUR', 'Carretera nacional '),
+('ZONA_CENTRO', 'Carretera monterrey saltillo');
 
 -- Insertar dispositivos
 INSERT INTO dispositivos (id_dispositivo, id_zona, nombre_dispositivo, tipo_dispositivo) VALUES 
