@@ -1,22 +1,22 @@
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('cors');
-const registrosRoutes = require('./routes/routes');
+const spRoutes = require('./sp/routes');
+const devicesRoutes = require('./devices/routes');
+const licensePlatesRoutes = require('./license_plates/routes');
+const videoclipsRoutes = require('./videoclips/routes');
 
 const app = express();
 
 // Middlewares
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
 // Rutas
-app.use('/api/registros', registrosRoutes);
+app.use('/api/sp', spRoutes);
+app.use('/api/devices', devicesRoutes);
+app.use('/api/license_plates', licensePlatesRoutes);
+app.use('/api/videoclips', videoclipsRoutes);
 
-// Manejo de errores
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({ error: 'Algo salió mal!' });
-});
 
 // Iniciar servidor
 const PORT = process.env.PORT || 3000;
