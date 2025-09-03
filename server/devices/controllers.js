@@ -1,4 +1,4 @@
-const { pool } = require('../config/db');
+const pool = require('../config/db');
 
 const ESP32_IP = 'http://192.168.0.252';
 const ESP32_ENDPOINT = '/activate-led';
