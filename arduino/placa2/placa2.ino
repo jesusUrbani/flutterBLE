@@ -14,12 +14,12 @@ unsigned long lastUpdate = 0;
 void setup() {
   Serial.begin(115200);
 
-  BLEDevice::init("Delim_B");
+  BLEDevice::init("Delim_A");
 
   pAdvertising = BLEDevice::getAdvertising();
 
   // Nombre visible en el scan response
-  scanResponseData.setName("Delim_B");
+  scanResponseData.setName("Delim_A");
   pAdvertising->setScanResponseData(scanResponseData);
 
   // Intervalo rápido (100 ms)

@@ -186,7 +186,7 @@ void setup() {
   
   connectToWiFi();
 
-  BLEDevice::init("BLE_A");
+  BLEDevice::init("BLE_B");
   BLEServer* pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 
