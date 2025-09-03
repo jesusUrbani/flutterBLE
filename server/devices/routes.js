@@ -16,3 +16,5 @@ router.post('/', [
     validatorMiddleware,
     registerDevice
 ]);
+
+module.exports = router;
