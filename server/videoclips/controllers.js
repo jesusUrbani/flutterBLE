@@ -13,8 +13,10 @@ const registerVideoclip = async (req, res) => {
 
     const data = {
       message: 'Videoclip registrado exitosamente',
-      archivo,
-      id_usuario_asociado
+      data: {
+        archivo,
+        id_usuario_asociado
+      }
     }
 
     res.status(201).json(data);
