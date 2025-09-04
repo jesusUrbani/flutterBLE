@@ -233,7 +233,7 @@ void loop() {
     if (millis() - lastTime > 10000) { // Reducido a 10 segundos para menos spam
       lastTime = millis();
       char mensaje[50];
-      snprintf(mensaje, sizeof(mensaje), "Dispositivo activo - %lu", millis() / 1000);
+      snprintf(mensaje, sizeof(mensaje), "Dispositivo activo PLACAA - %lu", millis() / 1000);
       pCharacteristic->setValue(mensaje);
       pCharacteristic->notify();
       Serial.print("Notificando: ");
