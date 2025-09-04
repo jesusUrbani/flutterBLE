@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const bleRoutes = require('./ble/routes');
+const accessLogsRoutes = require('./access-logs/routes');
 const devicesRoutes = require('./devices/routes');
 const licensePlatesRoutes = require('./license_plates/routes');
 const videoclipsRoutes = require('./videoclips/routes');
@@ -12,7 +12,7 @@ app.use(cors());
 app.use(express.json());
 
 // Rutas
-app.use('/api/ble', bleRoutes);
+app.use('/api/access-logs', accessLogsRoutes);
 app.use('/api/devices', devicesRoutes);
 app.use('/api/license_plates', licensePlatesRoutes);
 app.use('/api/videoclips', videoclipsRoutes);
