@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { body } = require('express-validator');
 const validatorMiddleware = require('../common/middlewares/validator');
-const { completeRegistration, registerAccessLog, getAllAccessLogs } = require('./controller');
+const { completeRegistration, registerAccessLog, getAccessLogs } = require('./controller');
 
 router.put('/', [
     body('id_usuario').trim().notEmpty().withMessage('id_usuario es requerido'),
@@ -19,7 +19,7 @@ router.post('/', [
 ]);
 
 router.get('/', [
-    getAllAccessLogs
+    getAccessLogs
 ]);
 
 module.exports = router;
