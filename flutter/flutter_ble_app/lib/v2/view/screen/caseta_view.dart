@@ -14,11 +14,17 @@ class CasetaPage extends StatefulWidget {
 class _CasetaPageState extends State<CasetaPage> {
   late CasetaViewModel _viewModel;
   final double montoPago = 10.0; // Monto fijo para el pago
+  int _refreshKey = 0; // Key para forzar rebuild completo
 
   @override
   void initState() {
     super.initState();
-    _viewModel = CasetaViewModel(onStateChanged: (_) => setState(() {}));
+    _viewModel = CasetaViewModel(
+      onStateChanged: (_) => setState(() {}),
+      onDisconnected: (_) => setState(() {
+        _refreshKey++; // Cambiar la key fuerza rebuild completo
+      }),
+    );
     _viewModel.init();
   }
 

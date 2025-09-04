@@ -21,6 +21,7 @@ class CasetaViewModel {
   StreamSubscription<List<int>>? mensajesSubscription;
   BluetoothCharacteristic? caracteristicaNotificaciones;
   double saldo = 100.0;
+  Function(void)? onDisconnected;
 
   // UUIDs
   final String serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
@@ -46,7 +47,7 @@ class CasetaViewModel {
 
   Function(void)? onStateChanged;
 
-  CasetaViewModel({this.onStateChanged});
+  CasetaViewModel({this.onStateChanged, this.onDisconnected});
 
   Timer? _reconexionTimer;
   bool _reconexionPendiente = false;
@@ -141,25 +142,20 @@ class CasetaViewModel {
     _beaconCheckTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       final now = DateTime.now();
 
-      // Limpiar beacons antiguos (no vistos en 60 segundos)
       beaconLastSeen.removeWhere((name, lastSeen) {
-        return now.difference(lastSeen).inSeconds > 60;
+        final diff = now.difference(lastSeen).inSeconds;
+        if (diff > 5) {
+          // ⚠️ más de 5s sin señal
+          if (beaconPrincipal == name) {
+            beaconPrincipal = null;
+            bleObjetivo = null;
+            estadoBLE = "Beacon $name inactivo (no visto en $diff s)";
+            notifyStateChanged();
+          }
+          return true;
+        }
+        return false;
       });
-
-      // Filtrar beacons activos
-      beaconsDelim = beaconsDelim.where((result) {
-        final name = result.advertisementData.localName.isNotEmpty
-            ? result.advertisementData.localName
-            : result.device.name;
-        return beaconLastSeen.containsKey(name);
-      }).toList();
-
-      // Si teníamos conexión pero perdimos los beacons, desconectar
-      if (dispositivoBLE != null && beaconsDelim.isEmpty) {
-        estadoBLE = "Perdiendo beacons, desconectando...";
-        notifyStateChanged();
-        detenerConexionBLE();
-      }
 
       notifyStateChanged();
     });
@@ -173,21 +169,27 @@ class CasetaViewModel {
     final rssi = result.rssi;
     final now = DateTime.now();
 
-    if (!lastBeaconRssi.containsKey(name)) {
-      lastRssiChange[name] = now;
-    } else if (lastBeaconRssi[name] != rssi) {
-      lastRssiChange[name] = now;
-    }
+    // Guardar última señal
     lastBeaconRssi[name] = rssi;
     beaconLastSeen[name] = now;
 
-    // Establecer el beacon principal si aún no se ha establecido
-    if (beaconPrincipal == null && beaconToBle.containsKey(name)) {
-      beaconPrincipal = name;
-      bleObjetivo = beaconToBle[name];
-      estadoBLE =
-          "Beacon principal detectado: $name -> Conectando a $bleObjetivo";
-      notifyStateChanged();
+    // Histeresis de estado: activo/inactivo
+    if (rssi > -90) {
+      // Señal fuerte, marcar como activo
+      if (beaconPrincipal == null && beaconToBle.containsKey(name)) {
+        beaconPrincipal = name;
+        bleObjetivo = beaconToBle[name];
+        estadoBLE = "Beacon $name activo (RSSI: $rssi)";
+        notifyStateChanged();
+      }
+    } else if (rssi < -95) {
+      // Señal muy débil, marcar como inactivo
+      if (beaconPrincipal == name) {
+        beaconPrincipal = null;
+        bleObjetivo = null;
+        estadoBLE = "Beacon $name inactivo por RSSI bajo ($rssi dBm)";
+        notifyStateChanged();
+      }
     }
   }
 
@@ -258,7 +260,8 @@ class CasetaViewModel {
           _onBeaconDetected(beacon);
         }
 
-        final activeBeacons = results.where((result) {
+        // 🔎 Nueva lógica: solo considerar activos los que siguen apareciendo en results
+        final activeBeacons = detectedNow.where((result) {
           final name = result.advertisementData.localName.isNotEmpty
               ? result.advertisementData.localName
               : result.device.name;
@@ -268,6 +271,21 @@ class CasetaViewModel {
 
         beaconsDelim = activeBeacons;
 
+        // Si el beacon principal ya no está en la lista → limpiamos
+        if (beaconPrincipal != null &&
+            !beaconsDelim.any(
+              (b) =>
+                  (b.advertisementData.localName.isNotEmpty
+                      ? b.advertisementData.localName
+                      : b.device.name) ==
+                  beaconPrincipal,
+            )) {
+          estadoBLE = "Beacon $beaconPrincipal desapareció";
+          beaconPrincipal = null;
+          bleObjetivo = null;
+          dispositivoBLE = null;
+          notifyStateChanged();
+        }
         // Lógica: Conectar automáticamente cuando hay un beacon principal detectado
         if (beaconPrincipal != null &&
             bleObjetivo != null &&
@@ -323,6 +341,23 @@ class CasetaViewModel {
     // Verificar que tenemos un beacon principal y BLE objetivo
     if (beaconPrincipal == null || bleObjetivo == null) {
       estadoBLE = "No hay beacon principal o BLE objetivo definido";
+      isConnecting = false;
+      notifyStateChanged();
+      return;
+    }
+    // 🔎 Validar si el beacon sigue en la lista de activos
+    final beaconSigueActivo = beaconsDelim.any((result) {
+      final name = result.advertisementData.localName.isNotEmpty
+          ? result.advertisementData.localName
+          : result.device.name;
+      return name == beaconPrincipal;
+    });
+
+    if (!beaconSigueActivo) {
+      estadoBLE =
+          "El beacon $beaconPrincipal ya no está activo, limpiando estado";
+      beaconPrincipal = null;
+      bleObjetivo = null;
       isConnecting = false;
       notifyStateChanged();
       return;
@@ -451,6 +486,10 @@ class CasetaViewModel {
     dispositivoBLE?.disconnect();
     dispositivoBLE = null;
 
+    // ⚠️ IMPORTANTE: limpiar beacons para evitar reconectar a uno viejo
+    beaconPrincipal = null;
+    bleObjetivo = null;
+
     // Actualizar estado
     estadoBLE = "Desconectado de $bleObjetivo";
     estadoConexion = 'Fuera de línea después de desconectar';
@@ -458,6 +497,9 @@ class CasetaViewModel {
 
     // Notificar cambios
     notifyStateChanged();
+
+    // Llamar al callback de desconexión para refrescar toda la página
+    onDisconnected?.call(null);
 
     // No reiniciamos el escaneo, se mantiene activo continuamente
   }
