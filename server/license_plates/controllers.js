@@ -27,7 +27,7 @@ const registerLicensePlate = async (req, res) => {
     if (error.errno === 1452) {
       return res.status(400).json({ error: 'El dispositivo no existe' });
     }
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: 'INTERNAL_SERVER_ERROR' });
   }
 };
 
@@ -35,24 +35,20 @@ const registerLicensePlate = async (req, res) => {
 const reportLicensePlate = async (req, res) => {
   try {
     const { placas, tipo_reporte, descripcion, estado } = req.body;
-
-    const fecha_reporte = new Date(new Date().toLocaleString('en-US', { 
-      timeZone: 'America/Mexico_City',
-    }));
-
-    await pool.query(
-      'INSERT INTO placas_reportadas (placas, tipo_reporte, descripcion, fecha_reporte, estado) VALUES (?, ?, ?, ?, ?)',
-      [placas, tipo_reporte, descripcion, fecha_reporte, estado]
+    const [rows] = await pool.query(
+      'INSERT INTO placas_reportadas (placas, tipo_reporte, descripcion, estado) VALUES (?, ?, ?, ?)',
+      [placas, tipo_reporte, descripcion, estado]
     );
 
     const data = {
       message: 'Placa reportada exitosamente',
       data: {
+        id: rows[0].id,
         placas,
         tipo_reporte,
         descripcion,
-        fecha_reporte,
-        estado
+        estado,
+        fecha_reporte: rows[0].fecha_reporte
       }
     }
 
