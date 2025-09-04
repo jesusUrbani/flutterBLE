@@ -24,6 +24,9 @@ const registerLicensePlate = async (req, res) => {
 
     res.status(201).json(data);
   } catch (error) {
+    if (error.errno === 1452) {
+      return res.status(400).json({ error: 'El dispositivo no existe' });
+    }
     res.status(500).json({ error: error.message });
   }
 };
