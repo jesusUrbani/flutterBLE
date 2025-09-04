@@ -31,4 +31,36 @@ const registerLicensePlate = async (req, res) => {
   }
 };
 
-module.exports = { registerLicensePlate };
+
+const reportLicensePlate = async (req, res) => {
+  try {
+    const { placas, tipo_reporte, descripcion, estado } = req.body;
+
+    const fecha_reporte = new Date(new Date().toLocaleString('en-US', { 
+      timeZone: 'America/Mexico_City',
+    }));
+
+    await pool.query(
+      'INSERT INTO placas_reportadas (placas, tipo_reporte, descripcion, fecha_reporte, estado) VALUES (?, ?, ?, ?, ?)',
+      [placas, tipo_reporte, descripcion, fecha_reporte, estado]
+    );
+
+    const data = {
+      message: 'Placa reportada exitosamente',
+      data: {
+        placas,
+        tipo_reporte,
+        descripcion,
+        fecha_reporte,
+        estado
+      }
+    }
+
+    res.status(201).json(data);
+  } catch (error) {
+    console.log(error);
+    res.status(500).json({ error: 'Error en el servidor' });
+  }
+};
+
+module.exports = { registerLicensePlate, reportLicensePlate };
