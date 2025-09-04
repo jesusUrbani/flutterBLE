@@ -43,12 +43,11 @@ const reportLicensePlate = async (req, res) => {
     const data = {
       message: 'Placa reportada exitosamente',
       data: {
-        id: rows[0].id,
+        id: rows.insertId,
         placas,
         tipo_reporte,
         descripcion,
-        estado,
-        fecha_reporte: rows[0].fecha_reporte
+        estado
       }
     }
 
