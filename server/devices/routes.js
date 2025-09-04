@@ -10,11 +10,12 @@ router.get('/', [
 
 router.post('/', [
     body('id_dispositivo').trim().notEmpty().withMessage('id_dispositivo es requerido'),
-    body('id_usuario').trim().notEmpty().withMessage('id_usuario es requerido'),
-    body('nombre_entrada').trim().notEmpty().withMessage('nombre_entrada es requerido'),
-    body('total_pagado').isFloat({ min: 0, max: 9999999999.99 }).withMessage('total_pagado debe ser un número'),
+    body('id_zona').trim().notEmpty().withMessage('id_zona es requerido'),
+    body('nombre_dispositivo').trim().notEmpty().withMessage('nombre_dispositivo es requerido'),
+    body('tipo_dispositivo').trim().notEmpty().withMessage('tipo_dispositivo es requerido').isIn(['BLE', 'CAMARA', 'LECTOR_PLACAS']),
     validatorMiddleware,
     registerDevice
 ]);
+
 
 module.exports = router;
