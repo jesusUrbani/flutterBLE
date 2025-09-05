@@ -299,3 +299,34 @@ SELECT
 FROM registros_ingresoBLE rib
 LEFT JOIN registros_placas rp ON rib.id = rp.id_ingreso
 LEFT JOIN registros_videoclips rv ON rib.id = rv.id_ingreso;
+
+
+CREATE TABLE IF NOT EXISTS tolls (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT unique_name UNIQUE (name)
+);
+
+
+CREATE TABLE IF NOT EXISTS tariffs (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  toll_id VARCHAR(50) NOT NULL,
+  vehicle_type VARCHAR(50) NOT NULL,
+  tariff DECIMAL(10, 2) NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (toll_id) REFERENCES tolls(id) ON DELETE RESTRICT
+  CONSTRAINT unique_toll_vehicle_type UNIQUE (toll_id, vehicle_type)
+);
+
+
+INSERT IGNORE INTO tolls (name) VALUES ('Caseta 1'), ('Casetas 2'), ('Casetas 3');
+INSERT IGNORE INTO tariffs (toll_id, vehicle_type, tariff) VALUES 
+(1, 'CARRO', 10),
+(1, 'BUS', 20),
+(1, 'CAMION', 30),
+(2, 'CARRO', 15),
+(2, 'BUS', 25),
+(2, 'CAMION', 35);
