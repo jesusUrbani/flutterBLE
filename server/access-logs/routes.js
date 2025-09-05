@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { body } = require('express-validator');
 const validatorMiddleware = require('../common/middlewares/validator');
-const { completeRegistration, registerAccessLog, getAccessLogs } = require('./controller');
+const { completeRegistration, registerAccessLog, finalizarIngreso, getAccessLogs } = require('./controller');
 
 router.put('/', [
     body('id_usuario').trim().notEmpty().withMessage('id_usuario es requerido'),
@@ -9,14 +9,23 @@ router.put('/', [
     completeRegistration
 ]);
 
-router.post('/', [
+router.post('/registrar-ingreso', [
     body('id_usuario').trim().notEmpty().withMessage('id_usuario es requerido'),
     body('id_dispositivo').trim().notEmpty().withMessage('id_dispositivo es requerido'),
+    body('vehicle_type').trim().notEmpty().withMessage('vehicle_type es requerido'),
     body('nombre_entrada').trim().notEmpty().withMessage('nombre_entrada es requerido'),
-    body('total_pagado').isFloat().withMessage('total_pagado debe ser un número'),
     validatorMiddleware,
     registerAccessLog
 ]);
+
+// Marcar salida/finalizado por id_dispositivo
+router.post('/finalizar-ingreso', [
+    body('id_dispositivo').trim().notEmpty().withMessage('id_dispositivo es requerido'),
+    validatorMiddleware,
+    finalizarIngreso
+]);
+
+
 
 router.get('/', [
     getAccessLogs

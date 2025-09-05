@@ -31,13 +31,17 @@ const completeRegistration = async (req, res) => {
 
 const registerAccessLog = async (req, res) => {
   try {
-    const { id_dispositivo, id_usuario, nombre_entrada, total_pagado } = req.body;
+    const { id_dispositivo, id_usuario, vehicle_type, nombre_entrada } = req.body;
 
-    await pool.query(
-      'CALL sp_insert_ingresoBLE(?, ?, ?, ?)',
-      [id_dispositivo, id_usuario, nombre_entrada, total_pagado || 0.00]
+    console.log('Datos recibidos:', req.body);
+
+    // Llamar al procedure RegistrarIngresoBLE
+    const [result] = await pool.query(
+      'CALL RegistrarIngresoBLE(?, ?, ?, ?)',
+      [id_dispositivo, id_usuario, vehicle_type, nombre_entrada]
     );
 
+    // Obtener el último registro insertado
     const [rows] = await pool.query(
       `SELECT * FROM registros_ingresoBLE 
        WHERE id_usuario = ? 
@@ -48,27 +52,57 @@ const registerAccessLog = async (req, res) => {
 
     const newRegistro = rows[0];
 
-    try {
-      await axios.post(`${ESP32_IP}${ESP32_ENDPOINT}`, {
-        action: 'activate_led',
-        duration: 3000,
-        registro_id: newRegistro.id,
-        dispositivo: id_dispositivo
-      }, { timeout: 5000 });
-
-      console.log('Comando enviado al ESP32 exitosamente');
-    } catch (espError) {
-      console.error('Error al comunicarse con el ESP32:', espError.message);
-    }
-
-    const data = {
-      message: 'Dispositivo registrado exitosamente',
+    // Respuesta exitosa
+    res.status(201).json({
+      ok: true,
+      message: 'Ingreso BLE registrado exitosamente',
       data: newRegistro
+    });
+
+  } catch (error) {
+    console.error('Error en registerAccessLog:', error);
+    res.status(500).json({ 
+      ok: false,
+      message: 'INTERNAL_SERVER_ERROR',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+}
+
+const finalizarIngreso = async (req, res) => {
+  try {
+    const { id_dispositivo } = req.body;
+
+
+    // Llamar al procedure FinalizarIngresoBLE
+    const [result] = await pool.query(
+      'CALL FinalizarIngresoBLE(?)',
+      [id_dispositivo]
+    );
+
+    // Si el procedure devuelve resultados
+    if (result && result[0] && result[0].length > 0) {
+      const registroFinalizado = result[0][0];
+      
+      res.status(200).json({
+        ok: true,
+        message: 'Ingreso finalizado exitosamente',
+        data: registroFinalizado
+      });
+    } else {
+      res.status(404).json({
+        ok: false,
+        message: 'No hay registros en curso para este dispositivo'
+      });
     }
 
-    res.status(201).json(data);
   } catch (error) {
-    res.status(500).json({ error: 'INTERNAL_SERVER_ERROR' });
+    console.error('❌ Error en finalizarIngreso:', error);
+    res.status(500).json({ 
+      ok: false,
+      message: 'INTERNAL_SERVER_ERROR',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 }
 
@@ -115,4 +149,4 @@ const getAccessLogs = async (req, res) => {
   }
 };
 
-module.exports = { completeRegistration, registerAccessLog, getAccessLogs };
+module.exports = { completeRegistration, registerAccessLog, getAccessLogs, finalizarIngreso };

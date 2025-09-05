@@ -18,11 +18,13 @@ router.post('/', [
     createTariff
 ]);
 
+/*
 router.put('/', [
     body('id').notEmpty().withMessage('id is required').isInt().withMessage('id must be an integer'),
     body('tariff').notEmpty().withMessage('tariff is required').isFloat().withMessage('tariff must be a float'),
     validatorMiddleware,
     updateTariff
 ]);
+*/
 
 module.exports = router;
