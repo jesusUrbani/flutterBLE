@@ -10,8 +10,14 @@
 const char* ssid = "Steren COM-852";
 const char* password = "12345678";
 
-// Configuración API
-const char* apiUrl = "http://192.168.31.197:3000/api/registros";
+// Configuración API - DEFINIR ESTOS VALORES SEGÚN TU CASETA
+const int TOLL_ID = 2;  // ID de la caseta (debe coincidir con la BD)
+const String ID_DISPOSITIVO = "BLE_CASETA2"; // ID del dispositivo (debe coincidir con la BD)
+
+// URLs de la API
+const String API_BASE = "http://192.168.31.197:3000";
+const String TARIFFS_URL = API_BASE + "/api/tariffs";
+const String REGISTROS_URL = API_BASE + "/api/registros/registrar-ingreso";
 
 // Configuración LED
 const int wifiLedPin = 2; // GPIO2 (LED integrado en muchas placas ESP32)
@@ -22,8 +28,8 @@ const int wifiLedPin = 2; // GPIO2 (LED integrado en muchas placas ESP32)
 
 BLECharacteristic* pCharacteristic;
 bool deviceConnected = false;
-String receivedIdDispositivo = "";
-String receivedNombreEntrada = "";
+String receivedVehicleType = "";
+String receivedIdUsuario = "";
 
 // Función para enviar mensaje de respuesta a través de BLE
 void enviarRespuestaBLE(const String& mensaje) {
@@ -37,6 +43,87 @@ void enviarRespuestaBLE(const String& mensaje) {
   }
 }
 
+// Función para obtener tarifa desde la API
+String obtenerTarifa(const String& vehicleType) {
+  if (WiFi.status() != WL_CONNECTED) {
+    return "ERROR: WiFi desconectado";
+  }
+
+  HTTPClient http;
+  String url = TARIFFS_URL + "?toll_id=" + String(TOLL_ID) + "&vehicle_type=" + vehicleType;
+  http.begin(url);
+  
+  Serial.print("Consultando tarifa: ");
+  Serial.println(url);
+
+  int httpCode = http.GET();
+  String response = "N/A";
+
+  if (httpCode == 200) {
+    response = http.getString();
+    Serial.print("Respuesta tarifa: ");
+    Serial.println(response);
+    
+    // Parsear JSON para extraer la tarifa
+    StaticJsonDocument<200> doc;
+    DeserializationError error = deserializeJson(doc, response);
+    
+    if (!error && doc["ok"] == true && doc["data"].containsKey("tariff")) {
+      float tarifa = doc["data"]["tariff"];
+      response = "TARIFA:" + String(tarifa, 2);
+    } else {
+      response = "ERROR: No se pudo obtener tarifa";
+    }
+  } else {
+    Serial.print("Error en GET tarifa. Código: ");
+    Serial.println(httpCode);
+    response = "ERROR: HTTP " + String(httpCode);
+  }
+
+  http.end();
+  return response;
+}
+
+// Función para registrar ingreso BLE
+String registrarIngresoBLE(const String& idUsuario, const String& vehicleType) {
+  if (WiFi.status() != WL_CONNECTED) {
+    return "ERROR: WiFi desconectado";
+  }
+
+  HTTPClient http;
+  http.begin(REGISTROS_URL);
+  http.addHeader("Content-Type", "application/json");
+
+  // Crear JSON para el registro
+  StaticJsonDocument<200> doc;
+  doc["id_dispositivo"] = ID_DISPOSITIVO;
+  doc["id_usuario"] = idUsuario;
+  doc["vehicle_type"] = vehicleType;
+  doc["nombre_entrada"] = "Entrada BLE";
+
+  String jsonBody;
+  serializeJson(doc, jsonBody);
+
+  Serial.print("Enviando registro a API: ");
+  Serial.println(jsonBody);
+
+  int httpCode = http.POST(jsonBody);
+  String response = "N/A";
+
+  if (httpCode == 201 || httpCode == 200) {
+    response = http.getString();
+    Serial.print("Registro exitoso. Código: ");
+    Serial.println(httpCode);
+  } else {
+    Serial.print("Error en registro. Código: ");
+    Serial.println(httpCode);
+    response = "ERROR: HTTP " + String(httpCode);
+  }
+
+  http.end();
+  return response;
+}
+
 // Callback para manejar escrituras en la característica BLE
 class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* pCharacteristic) {
@@ -46,95 +133,58 @@ class MyCharacteristicCallbacks : public BLECharacteristicCallbacks {
       Serial.print("Datos recibidos via BLE: ");
       Serial.println(value.c_str());
       
-      // Parsear los datos recibidos (formato esperado: "id_dispositivo;nombre_entrada")
+      // Parsear los datos recibidos (formato: "id_usuario;vehicle_type")
       String data = String(value.c_str());
       int separatorIndex = data.indexOf(';');
       
       if (separatorIndex != -1) {
-        receivedIdDispositivo = data.substring(0, separatorIndex);
-        receivedNombreEntrada = data.substring(separatorIndex + 1);
+        receivedIdUsuario = data.substring(0, separatorIndex);
+        receivedVehicleType = data.substring(separatorIndex + 1);
         
-        Serial.print("ID Dispositivo: ");
-        Serial.println(receivedIdDispositivo);
-        Serial.print("Nombre Entrada: ");
-        Serial.println(receivedNombreEntrada);
+        Serial.print("ID Usuario: ");
+        Serial.println(receivedIdUsuario);
+        Serial.print("Tipo Vehículo: ");
+        Serial.println(receivedVehicleType);
         
-        // Enviar datos a la API solo si ambos campos están presentes
-        if (receivedIdDispositivo.length() > 0 && receivedNombreEntrada.length() > 0) {
-          registrarConexionBLE();
+        // Validar campos
+        if (receivedIdUsuario.length() > 0 && receivedVehicleType.length() > 0) {
+          // 1. Primero obtener la tarifa
+          enviarRespuestaBLE("Consultando tarifa...");
+          String respuestaTarifa = obtenerTarifa(receivedVehicleType);
+          enviarRespuestaBLE(respuestaTarifa);
+          
+          delay(1000); // Pequeña pausa
+          
+          // 2. Luego registrar el ingreso
+          enviarRespuestaBLE("Registrando ingreso...");
+          String respuestaRegistro = registrarIngresoBLE(receivedIdUsuario, receivedVehicleType);
+          enviarRespuestaBLE(respuestaRegistro);
+          
         } else {
           enviarRespuestaBLE("ERROR: Campos vacíos");
         }
       } else {
-        enviarRespuestaBLE("ERROR: Formato incorrecto. Usar: id;nombre");
+        enviarRespuestaBLE("ERROR: Formato incorrecto. Usar: id_usuario;vehicle_type");
       }
+      
+      // Limpiar los datos después de procesarlos
+      receivedIdUsuario = "";
+      receivedVehicleType = "";
     }
   }
 };
-
-void registrarConexionBLE() {
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    http.begin(apiUrl);
-    http.addHeader("Content-Type", "application/json");
-
-    StaticJsonDocument<200> doc;
-    doc["id_dispositivo"] = receivedIdDispositivo;
-    doc["nombre_entrada"] = receivedNombreEntrada;
-
-    String jsonBody;
-    serializeJson(doc, jsonBody);
-
-    Serial.print("Enviando a API: ");
-    Serial.println(jsonBody);
-
-    int httpCode = http.POST(jsonBody);
-    String responsePayload = "N/A";
-
-    if (httpCode > 0) {
-      responsePayload = http.getString();
-      Serial.print("Registrado en API. Código: ");
-      Serial.println(httpCode);
-      Serial.print("Respuesta: ");
-      Serial.println(responsePayload);
-      
-      // Enviar respuesta exitosa por BLE
-      String mensajeExito = "SUCCESS: Código " + String(httpCode) + " - " + responsePayload;
-      enviarRespuestaBLE(mensajeExito);
-      
-    } else {
-      Serial.print("Fallo en POST. Código: ");
-      Serial.println(httpCode);
-      
-      // Enviar error por BLE
-      String mensajeError = "ERROR: Fallo HTTP - Código " + String(httpCode);
-      enviarRespuestaBLE(mensajeError);
-    }
-
-    http.end();
-    
-    // Limpiar los datos después de enviarlos
-    receivedIdDispositivo = "";
-    receivedNombreEntrada = "";
-    
-  } else {
-    Serial.println("WiFi no conectado, no se puede enviar a API");
-    enviarRespuestaBLE("ERROR: WiFi desconectado");
-  }
-}
 
 class MyServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) {
     deviceConnected = true;
     Serial.println("Conectado BLE");
-    enviarRespuestaBLE("Conectado. Enviar: id;nombre");
+    enviarRespuestaBLE("Conectado. Enviar: id_usuario;tipo_vehiculo");
   }
 
   void onDisconnect(BLEServer* pServer) {
     deviceConnected = false;
     Serial.println("Desconectado BLE");
-
-    delay(100);  // da tiempo a liberar recursos
+    delay(100);
     BLEDevice::startAdvertising();
     Serial.println("Reanudando publicidad BLE");
   }
@@ -142,11 +192,11 @@ class MyServerCallbacks : public BLEServerCallbacks {
 
 void connectToWiFi() {
   if(WiFi.status() == WL_CONNECTED) {
-    digitalWrite(wifiLedPin, HIGH); // Enciende LED si ya está conectado
+    digitalWrite(wifiLedPin, HIGH);
     return;
   }
   
-  digitalWrite(wifiLedPin, LOW); // Apaga LED durante conexión
+  digitalWrite(wifiLedPin, LOW);
   WiFi.disconnect();
   delay(100);
   WiFi.mode(WIFI_STA);
@@ -160,17 +210,17 @@ void connectToWiFi() {
   
   unsigned long startAttemptTime = millis();
   
-  while(WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
+  while(WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 15000) {
     delay(500);
     Serial.print(".");
-    digitalWrite(wifiLedPin, !digitalRead(wifiLedPin)); // Parpadeo durante conexión
+    digitalWrite(wifiLedPin, !digitalRead(wifiLedPin));
   }
   
   if(WiFi.status() != WL_CONNECTED) {
     Serial.println("\nFallo en conexión WiFi");
     digitalWrite(wifiLedPin, LOW);
   } else {
-    digitalWrite(wifiLedPin, HIGH); // Enciende LED cuando conectado
+    digitalWrite(wifiLedPin, HIGH);
     Serial.println("\nWiFi conectado");
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
@@ -182,10 +232,20 @@ void setup() {
   
   // Configurar pin del LED
   pinMode(wifiLedPin, OUTPUT);
-  digitalWrite(wifiLedPin, LOW); // Inicia con LED apagado
+  digitalWrite(wifiLedPin, LOW);
+  
+  // Mostrar configuración
+  Serial.println("=== CONFIGURACIÓN ESP32 ===");
+  Serial.print("Toll ID: ");
+  Serial.println(TOLL_ID);
+  Serial.print("ID Dispositivo: ");
+  Serial.println(ID_DISPOSITIVO);
+  Serial.print("API Base: ");
+  Serial.println(API_BASE);
   
   connectToWiFi();
 
+  // Inicializar BLE
   BLEDevice::init("BLE_B");
   BLEServer* pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
@@ -199,45 +259,44 @@ void setup() {
     BLECharacteristic::PROPERTY_NOTIFY
   );
 
-  // Añadir callback para manejar escrituras
   pCharacteristic->setCallbacks(new MyCharacteristicCallbacks());
-  
   pCharacteristic->addDescriptor(new BLE2902());
-  pCharacteristic->setValue("Listo. Enviar: id;nombre");
+  pCharacteristic->setValue("Listo. Enviar: id_usuario;tipo_vehiculo");
 
   pService->start();
   BLEDevice::getAdvertising()->start();
+  
+  Serial.println("=== BLE INICIADO ===");
   Serial.println("Esperando conexión BLE...");
-  Serial.println("Formato esperado: id_dispositivo;nombre_entrada");
+  Serial.println("Formato esperado: id_usuario;vehicle_type");
+  Serial.println("Ejemplo: USER_123;CARRO");
 }
 
 void loop() {
   static unsigned long lastWifiCheck = 0;
   
   // Verificar estado WiFi periódicamente
-  if(millis() - lastWifiCheck > 5000) {
+  if(millis() - lastWifiCheck > 10000) {
     lastWifiCheck = millis();
     
     if(WiFi.status() != WL_CONNECTED) {
-      digitalWrite(wifiLedPin, LOW); // Apaga LED si WiFi se desconecta
+      digitalWrite(wifiLedPin, LOW);
       Serial.println("WiFi desconectado, intentando reconectar...");
       connectToWiFi();
     } else {
-      digitalWrite(wifiLedPin, HIGH); // Mantiene LED encendido si está conectado
+      digitalWrite(wifiLedPin, HIGH);
     }
   }
 
-  // Notificaciones periódicas (opcional, puedes comentar si no las necesitas)
+  // Notificación de estado periódica
   if (deviceConnected) {
     static unsigned long lastTime = 0;
-    if (millis() - lastTime > 10000) { // Reducido a 10 segundos para menos spam
+    if (millis() - lastTime > 30000) {
       lastTime = millis();
-      char mensaje[50];
-      snprintf(mensaje, sizeof(mensaje), "Dispositivo activo - %lu", millis() / 1000);
-      pCharacteristic->setValue(mensaje);
+      String statusMsg = "Caseta " + String(TOLL_ID) + " - Online";
+      pCharacteristic->setValue(statusMsg.c_str());
       pCharacteristic->notify();
-      Serial.print("Notificando: ");
-      Serial.println(mensaje);
+      Serial.println("Notificación de estado enviada");
     }
   }
 }
