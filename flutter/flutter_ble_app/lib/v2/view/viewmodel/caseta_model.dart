@@ -20,7 +20,7 @@ class CasetaViewModel {
   Timer? _beaconCheckTimer;
   StreamSubscription<List<int>>? mensajesSubscription;
   BluetoothCharacteristic? caracteristicaNotificaciones;
-  double saldo = 100.0;
+  double saldo = 1000.0;
   Function(void)? onDisconnected;
 
   // UUIDs
@@ -99,18 +99,30 @@ class CasetaViewModel {
     return bestBeacon;
   }
 
+  // Método para realizar un pago ACTUALIZADO
   Future<void> realizarPago(double monto) async {
+    if (monto <= 0) {
+      mensajesBLE.add('ERROR: Monto de pago inválido');
+      notifyStateChanged();
+      return;
+    }
+
     if (saldo >= monto) {
       saldo -= monto;
       mensajesBLE.add('Pago realizado: \$${monto.toStringAsFixed(2)}');
       mensajesBLE.add('Saldo restante: \$${saldo.toStringAsFixed(2)}');
       notifyStateChanged();
+
+      // Solo enviar datos por BLE si el pago fue exitoso
       await _enviarDatosPorBLE();
+
+      // Reiniciar validación después del pago
       _reiniciarValidacionBeacons();
     } else {
       mensajesBLE.add(
-        'Saldo insuficiente para pagar \$${monto.toStringAsFixed(2)}',
+        'Saldo insuficiente. Se requiere: \$${monto.toStringAsFixed(2)}',
       );
+      mensajesBLE.add('Saldo actual: \$${saldo.toStringAsFixed(2)}');
       notifyStateChanged();
     }
   }
@@ -368,6 +380,38 @@ class CasetaViewModel {
     );
   }
 
+  // Método para enviar datos automáticamente al conectar
+  Future<void> _enviarDatosAutomaticamente() async {
+    if (dispositivoBLE == null) return;
+
+    // Pequeña pausa para asegurar que la conexión esté estable
+    await Future.delayed(Duration(milliseconds: 1000));
+
+    try {
+      // 📤 ENVIAR DATOS AL CONECTAR (esto activará el ESP32 para que responda con tarifa)
+      final datos = 'USER_123;CARRO'; // Datos fijos como especificaste
+      final bytes = datos.codeUnits;
+
+      final servicios = await dispositivoBLE!.discoverServices();
+      final servicio = servicios.firstWhere(
+        (s) => s.uuid == Guid(serviceUUID),
+        orElse: () => throw Exception("Servicio no encontrado"),
+      );
+
+      final caracteristica = servicio.characteristics.firstWhere(
+        (c) => c.uuid == Guid(characteristicUUID),
+        orElse: () => throw Exception("Característica no encontrada"),
+      );
+
+      await caracteristica.write(bytes, withoutResponse: false);
+      mensajesBLE.add('Datos enviados al ESP32: $datos');
+      mensajesBLE.add('Esperando tarifa...');
+    } catch (e) {
+      mensajesBLE.add('Error al enviar datos automáticamente: ${e.toString()}');
+      notifyStateChanged();
+    }
+  }
+
   Future<void> _conectarAutomaticamente() async {
     if (dispositivoBLE != null ||
         beaconPrincipal == null ||
@@ -434,6 +478,10 @@ class CasetaViewModel {
       mensajesBLE.add('Conectado al ESP32. Listo para operar.');
 
       notifyStateChanged();
+
+      // 🎯 ENVIAR DATOS AUTOMÁTICAMENTE AL CONECTAR
+      // Esto hará que el ESP32 responda con la tarifa
+      await _enviarDatosAutomaticamente();
     } catch (e) {
       estadoBLE = "❌ Error conectando a $bleObjetivo: ${e.toString()}";
       isConnecting = false;
@@ -453,6 +501,10 @@ class CasetaViewModel {
 
     dispositivoBLE?.disconnect();
     dispositivoBLE = null;
+
+    // LIMPIAR TARIFA AL DESCONECTAR
+    tarifaCalculada = null;
+    errorMensaje = null;
 
     beaconPrincipal = null;
     bleObjetivo = null;
