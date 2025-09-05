@@ -3,6 +3,27 @@
 CREATE DATABASE IF NOT EXISTS control_acceso;
 USE control_acceso;
 
+
+CREATE TABLE IF NOT EXISTS tolls (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(50) NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT unique_name UNIQUE (name)
+);
+
+
+CREATE TABLE IF NOT EXISTS tariffs (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  toll_id INT NOT NULL,
+  vehicle_type VARCHAR(50) NOT NULL,
+  tariff DECIMAL(10, 2) NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  FOREIGN KEY (toll_id) REFERENCES tolls(id) ON DELETE RESTRICT,
+  CONSTRAINT unique_toll_vehicle_type UNIQUE (toll_id, vehicle_type)
+);
+
 CREATE TABLE IF NOT EXISTS zona (
     id_zona VARCHAR(50) PRIMARY KEY,
     nombre_zona VARCHAR(100) NOT NULL,
@@ -299,3 +320,33 @@ SELECT
 FROM registros_ingresoBLE rib
 LEFT JOIN registros_placas rp ON rib.id = rp.id_ingreso
 LEFT JOIN registros_videoclips rv ON rib.id = rv.id_ingreso;
+
+
+
+-- Elimina todos los registros y reinicia el contador auto_increment
+TRUNCATE TABLE tariffs;
+
+INSERT IGNORE INTO tolls (name) VALUES ('Caseta 1'), ('Casetas 2'), ('Casetas 3');
+INSERT IGNORE INTO tariffs (toll_id, vehicle_type, tariff) VALUES 
+(1, 'MOTO', 10),
+(1, 'CARRO', 20),
+(1, 'CAMIONETA', 30),
+(2, 'MOTO', 15),
+(2, 'CARRO', 25),
+(2, 'CAMIONETA', 35);
+
+-- Ver todos los peajes (tolls)
+SELECT * FROM tolls;
+
+-- Ver todas las tarifas (tariffs)
+SELECT * FROM tariffs;
+
+-- Tarifas con nombres de peajes
+SELECT 
+    t.name as peaje,
+    tr.vehicle_type as tipo_vehiculo,
+    tr.tariff as tarifa,
+    tr.created_at
+FROM tariffs tr
+INNER JOIN tolls t ON tr.toll_id = t.id
+ORDER BY t.name, tr.vehicle_type;

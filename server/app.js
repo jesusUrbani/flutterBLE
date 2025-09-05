@@ -1,22 +1,26 @@
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('cors');
-const registrosRoutes = require('./routes/routes');
+const accessLogsRoutes = require('./access-logs/routes');
+const devicesRoutes = require('./devices/routes');
+const licensePlatesRoutes = require('./license_plates/routes');
+const videoclipsRoutes = require('./videoclips/routes');
+const tariffsRoutes = require('./tariffs/routes');
+const tollsRoutes = require('./tolls/routes');
 
 const app = express();
 
 // Middlewares
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
 // Rutas
-app.use('/api/registros', registrosRoutes);
+app.use('/api/access-logs', accessLogsRoutes);
+app.use('/api/devices', devicesRoutes);
+app.use('/api/license_plates', licensePlatesRoutes);
+app.use('/api/videoclips', videoclipsRoutes);
+app.use('/api/tariffs', tariffsRoutes);
+app.use('/api/tolls', tollsRoutes);
 
-// Manejo de errores
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({ error: 'Algo salió mal!' });
-});
 
 // Iniciar servidor
 const PORT = process.env.PORT || 3000;
