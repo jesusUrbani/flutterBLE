@@ -4,6 +4,8 @@ const accessLogsRoutes = require('./access-logs/routes');
 const devicesRoutes = require('./devices/routes');
 const licensePlatesRoutes = require('./license_plates/routes');
 const videoclipsRoutes = require('./videoclips/routes');
+const tariffsRoutes = require('./tariffs/routes');
+const tollsRoutes = require('./tolls/routes');
 
 const app = express();
 
@@ -16,6 +18,8 @@ app.use('/api/access-logs', accessLogsRoutes);
 app.use('/api/devices', devicesRoutes);
 app.use('/api/license_plates', licensePlatesRoutes);
 app.use('/api/videoclips', videoclipsRoutes);
+app.use('/api/tariffs', tariffsRoutes);
+app.use('/api/tolls', tollsRoutes);
 
 
 // Iniciar servidor
