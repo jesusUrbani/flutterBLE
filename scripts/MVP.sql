@@ -164,6 +164,9 @@ SELECT * FROM tolls;
 -- Ver todas las tarifas (tariffs)
 SELECT * FROM tariffs;
 
+SELECT * FROM dispositivos;
+
+
 SELECT * FROM registros_ingresoBLE;
 
 
@@ -176,3 +179,22 @@ SELECT
 FROM tariffs tr
 INNER JOIN tolls t ON tr.toll_id = t.id
 ORDER BY t.name, tr.vehicle_type;
+
+
+SELECT 
+    r.id,
+    r.id_usuario,
+    r.vehicle_type as tipo_vehiculo,
+    r.nombre_entrada,
+    r.fecha_hora_ingreso,
+    r.estado,
+    d.nombre_dispositivo,
+    t.name as nombre_caseta,
+    t.id as id_caseta,
+    tar.tariff as costo_tarifa,
+    CONCAT('$', FORMAT(tar.tariff, 2)) as costo_formateado
+FROM registros_ingresoBLE r
+INNER JOIN dispositivos d ON r.id_dispositivo = d.id_dispositivo
+INNER JOIN tolls t ON d.toll_id = t.id
+INNER JOIN tariffs tar ON d.toll_id = tar.toll_id AND r.vehicle_type = tar.vehicle_type
+ORDER BY r.fecha_hora_ingreso DESC;
