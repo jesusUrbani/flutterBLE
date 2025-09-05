@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import '../widget/beacon_widget.dart';
 import '../viewmodel/caseta_model.dart';
 
@@ -13,8 +12,8 @@ class CasetaPage extends StatefulWidget {
 
 class _CasetaPageState extends State<CasetaPage> {
   late CasetaViewModel _viewModel;
-  final double montoPago = 10.0; // Monto fijo para el pago
-  int _refreshKey = 0; // Key para forzar rebuild completo
+  final double montoPago = 10.0;
+  int _refreshKey = 0;
 
   @override
   void initState() {
@@ -22,7 +21,7 @@ class _CasetaPageState extends State<CasetaPage> {
     _viewModel = CasetaViewModel(
       onStateChanged: (_) => setState(() {}),
       onDisconnected: (_) => setState(() {
-        _refreshKey++; // Cambiar la key fuerza rebuild completo
+        _refreshKey++;
       }),
     );
     _viewModel.init();
@@ -42,7 +41,6 @@ class _CasetaPageState extends State<CasetaPage> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            // Mostrar saldo
             Container(
               padding: EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -85,14 +83,13 @@ class _CasetaPageState extends State<CasetaPage> {
               style: TextStyle(fontSize: 18, color: Colors.purple),
             ),
             SizedBox(height: 20),
-            // Botón para iniciar el escaneo de ble
+
             if (_viewModel.beaconsDelim.length >= 2 &&
                 _viewModel.dispositivoBLE == null)
-              Container(), // Ya no mostramos el botón de conexión manual
+              Container(),
 
             SizedBox(height: 10),
 
-            // Botones cuando está conectado
             if (_viewModel.dispositivoBLE != null) ...[
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -134,10 +131,7 @@ class _CasetaPageState extends State<CasetaPage> {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               Expanded(
-                child: MensajesBLEWidget(
-                  // Usamos el widget de mensajes
-                  mensajes: _viewModel.mensajesBLE,
-                ),
+                child: MensajesBLEWidget(mensajes: _viewModel.mensajesBLE),
               ),
             ],
             Text(
@@ -147,7 +141,6 @@ class _CasetaPageState extends State<CasetaPage> {
             SizedBox(height: 10),
             Expanded(
               child: BeaconListWidget(
-                // Usamos el widget de beacons
                 beacons: _viewModel.beaconsDelim,
                 getSignalColor: _viewModel.getSignalColor,
               ),

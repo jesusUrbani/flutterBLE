@@ -15,9 +15,9 @@ const int TOLL_ID = 2;  // ID de la caseta (debe coincidir con la BD)
 const String ID_DISPOSITIVO = "BLE_CASETA2"; // ID del dispositivo (debe coincidir con la BD)
 
 // URLs de la API
-const String API_BASE = "http://192.168.31.197:3000";
+const String API_BASE = "http://192.168.0.250:3000";
 const String TARIFFS_URL = API_BASE + "/api/tariffs";
-const String REGISTROS_URL = API_BASE + "/api/registros/registrar-ingreso";
+const String REGISTROS_URL = API_BASE + "/api/access-logs/registrar-ingreso";
 
 // Configuración LED
 const int wifiLedPin = 2; // GPIO2 (LED integrado en muchas placas ESP32)
