@@ -20,7 +20,8 @@ class CasetaViewModel {
   Timer? _beaconCheckTimer;
   StreamSubscription<List<int>>? mensajesSubscription;
   BluetoothCharacteristic? caracteristicaNotificaciones;
-  double saldo = 100.0;
+  double saldo = 1000.0;
+  Function(void)? onDisconnected;
 
   // UUIDs
   final String serviceUUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
@@ -30,12 +31,33 @@ class CasetaViewModel {
   final String idDispositivo = "ESP32-URBANI";
   final String nombreEntrada = "Entrada Principal";
 
-  Map<String, int> lastBeaconRssi = {};
-  Map<String, DateTime> lastRssiChange = {};
+  // Variables para el nuevo flujo
+  double? tarifaCalculada;
+  bool procesandoPeticion = false;
+  String? errorMensaje;
+
+  Map<String, int> beaconRssiValues = {};
+  Map<String, DateTime> lastRssiUpdate = {};
+
+  // Mapeo de beacons a BLEs
+  final Map<String, String> beaconToBle = {
+    "Delim_A": "BLE_A",
+    "Delim_B": "BLE_B",
+    "Delim_C": "BLE_C",
+  };
+
+  // Beacon principal detectado
+  String? beaconPrincipal;
+  String? bleObjetivo;
 
   Function(void)? onStateChanged;
 
-  CasetaViewModel({this.onStateChanged});
+  // Parámetros para determinar el beacon más cercano
+  final int rssiThreshold = -90;
+  final int rssiHysteresis = 5;
+  int? lastBestRssi;
+
+  CasetaViewModel({this.onStateChanged, this.onDisconnected});
 
   Timer? _reconexionTimer;
   bool _reconexionPendiente = false;
@@ -49,27 +71,62 @@ class CasetaViewModel {
     _startBeaconMonitoring();
   }
 
-  // Método para realizar un pago
+  String? _getNearestBeacon() {
+    if (beaconRssiValues.isEmpty) return null;
+
+    final validBeacons = beaconRssiValues.entries
+        .where(
+          (entry) =>
+              entry.value >= rssiThreshold &&
+              beaconToBle.containsKey(entry.key),
+        )
+        .toList();
+
+    if (validBeacons.isEmpty) return null;
+
+    validBeacons.sort((a, b) => b.value.compareTo(a.value));
+
+    final bestBeacon = validBeacons.first.key;
+    final bestRssi = validBeacons.first.value;
+
+    if (lastBestRssi != null && beaconPrincipal == bestBeacon) {
+      if (bestRssi < lastBestRssi! - rssiHysteresis) {
+        return beaconPrincipal;
+      }
+    }
+
+    lastBestRssi = bestRssi;
+    return bestBeacon;
+  }
+
+  // Método para realizar un pago ACTUALIZADO
   Future<void> realizarPago(double monto) async {
+    if (monto <= 0) {
+      mensajesBLE.add('ERROR: Monto de pago inválido');
+      notifyStateChanged();
+      return;
+    }
+
     if (saldo >= monto) {
       saldo -= monto;
       mensajesBLE.add('Pago realizado: \$${monto.toStringAsFixed(2)}');
       mensajesBLE.add('Saldo restante: \$${saldo.toStringAsFixed(2)}');
       notifyStateChanged();
-      // Enviar datos por BLE después del pago
+
+      // Solo enviar datos por BLE si el pago fue exitoso
       await _enviarDatosPorBLE();
 
-      // Solo desconectamos después del pago pero mantenemos el escaneo
+      // Reiniciar validación después del pago
       _reiniciarValidacionBeacons();
     } else {
       mensajesBLE.add(
-        'Saldo insuficiente para pagar \$${monto.toStringAsFixed(2)}',
+        'Saldo insuficiente. Se requiere: \$${monto.toStringAsFixed(2)}',
       );
+      mensajesBLE.add('Saldo actual: \$${saldo.toStringAsFixed(2)}');
       notifyStateChanged();
     }
   }
 
-  // Método para enviar datos por BLE
   Future<void> _enviarDatosPorBLE() async {
     if (dispositivoBLE == null) {
       mensajesBLE.add('No hay conexión BLE para enviar datos');
@@ -77,12 +134,15 @@ class CasetaViewModel {
       return;
     }
 
+    procesandoPeticion = true;
+    errorMensaje = null;
+    notifyStateChanged();
+
     try {
-      // Formato: "id_dispositivo;nombre_entrada"
-      final datos = '$idDispositivo;$nombreEntrada';
+      // 📤 NUEVO FORMATO: "id_usuario;vehicle_type"
+      final datos = 'USER_123;CARRO'; // Datos fijos como especificaste
       final bytes = datos.codeUnits;
 
-      // Buscar la característica para escribir
       final servicios = await dispositivoBLE!.discoverServices();
       final servicio = servicios.firstWhere(
         (s) => s.uuid == Guid(serviceUUID),
@@ -94,28 +154,59 @@ class CasetaViewModel {
         orElse: () => throw Exception("Característica no encontrada"),
       );
 
-      // Escribir en la característica BLE
       await caracteristica.write(bytes, withoutResponse: false);
-
       mensajesBLE.add('Datos enviados por BLE: $datos');
-      notifyStateChanged();
-
-      // Opcional: Esperar un breve momento para asegurar que el envío se complete
-      await Future.delayed(Duration(milliseconds: 500));
+      mensajesBLE.add('Esperando respuesta del ESP32...');
     } catch (e) {
-      mensajesBLE.add('Error al enviar datos por BLE: ${e.toString()}');
+      errorMensaje = 'Error al enviar datos por BLE: ${e.toString()}';
+      mensajesBLE.add(errorMensaje!);
+    } finally {
+      procesandoPeticion = false;
       notifyStateChanged();
     }
   }
 
+  Future<void> _configurarNotificacionesBLE(
+    BluetoothCharacteristic caracteristica,
+  ) async {
+    await caracteristica.setNotifyValue(true);
+
+    mensajesSubscription?.cancel();
+
+    mensajesSubscription = caracteristica.onValueReceived.listen((value) {
+      final mensaje = String.fromCharCodes(value);
+      mensajesBLE.add('Respuesta ESP32: $mensaje');
+
+      // 🎯 PROCESAR RESPUESTAS DEL ESP32
+      if (mensaje.startsWith('TARIFA:')) {
+        final tarifaStr = mensaje.replaceFirst('TARIFA:', '');
+        tarifaCalculada = double.tryParse(tarifaStr);
+        if (tarifaCalculada != null) {
+          mensajesBLE.add(
+            'Tarifa calculada: \$${tarifaCalculada!.toStringAsFixed(2)}',
+          );
+        }
+      } else if (mensaje.startsWith('SUCCESS:')) {
+        mensajesBLE.add('Registro completado exitosamente');
+      } else if (mensaje.startsWith('ERROR:')) {
+        errorMensaje = mensaje.replaceFirst('ERROR:', '');
+        mensajesBLE.add('Error: $errorMensaje');
+      }
+
+      if (mensajesBLE.length > 15) mensajesBLE.removeRange(0, 5);
+      notifyStateChanged();
+    });
+  }
+
   void _reiniciarValidacionBeacons() {
-    // Limpiamos el estado de beacons para forzar revalidación
     beaconsDelim.clear();
     beaconLastSeen.clear();
-    lastBeaconRssi.clear();
-    lastRssiChange.clear();
+    beaconRssiValues.clear();
+    lastRssiUpdate.clear();
+    beaconPrincipal = null;
+    bleObjetivo = null;
+    lastBestRssi = null;
 
-    // Si estábamos conectados, desconectamos para revalidar beacons primero
     if (dispositivoBLE != null) {
       detenerConexionBLE();
     }
@@ -125,27 +216,43 @@ class CasetaViewModel {
   }
 
   void _startBeaconMonitoring() {
-    _beaconCheckTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    _beaconCheckTimer = Timer.periodic(const Duration(seconds: 2), (timer) {
       final now = DateTime.now();
 
-      // Limpiar beacons antiguos (no vistos en 60 segundos)
       beaconLastSeen.removeWhere((name, lastSeen) {
-        return now.difference(lastSeen).inSeconds > 60;
+        final diff = now.difference(lastSeen).inSeconds;
+        if (diff > 10) {
+          beaconRssiValues.remove(name);
+          if (beaconPrincipal == name && dispositivoBLE == null) {
+            beaconPrincipal = null;
+            bleObjetivo = null;
+            lastBestRssi = null;
+            estadoBLE = "Beacon $name inactivo (no visto en $diff s)";
+            notifyStateChanged();
+          }
+          return true;
+        }
+        return false;
       });
 
-      // Filtrar beacons activos
-      beaconsDelim = beaconsDelim.where((result) {
-        final name = result.advertisementData.localName.isNotEmpty
-            ? result.advertisementData.localName
-            : result.device.name;
-        return beaconLastSeen.containsKey(name);
-      }).toList();
+      if (dispositivoBLE == null) {
+        final nearestBeacon = _getNearestBeacon();
 
-      // Si teníamos conexión pero perdimos los beacons, desconectar
-      if (dispositivoBLE != null && beaconsDelim.length < 2) {
-        estadoBLE = "Perdiendo beacons, desconectando...";
-        notifyStateChanged();
-        detenerConexionBLE();
+        if (nearestBeacon != null && nearestBeacon != beaconPrincipal) {
+          beaconPrincipal = nearestBeacon;
+          bleObjetivo = beaconToBle[nearestBeacon];
+          final rssi = beaconRssiValues[nearestBeacon];
+          estadoBLE = "Beacon más cercano: $nearestBeacon (RSSI: $rssi dBm)";
+          notifyStateChanged();
+
+          if (!isConnecting && !_reconexionPendiente) {
+            _reconexionPendiente = true;
+            _reconexionTimer = Timer(Duration(seconds: 1), () {
+              _reconexionPendiente = false;
+              _conectarAutomaticamente();
+            });
+          }
+        }
       }
 
       notifyStateChanged();
@@ -157,16 +264,24 @@ class CasetaViewModel {
         ? result.advertisementData.localName
         : result.device.name;
 
+    if (!name.startsWith('Delim')) return;
+
     final rssi = result.rssi;
     final now = DateTime.now();
 
-    if (!lastBeaconRssi.containsKey(name)) {
-      lastRssiChange[name] = now;
-    } else if (lastBeaconRssi[name] != rssi) {
-      lastRssiChange[name] = now;
-    }
-    lastBeaconRssi[name] = rssi;
+    beaconRssiValues[name] = rssi;
     beaconLastSeen[name] = now;
+    lastRssiUpdate[name] = now;
+
+    if (!beaconsDelim.any(
+      (beacon) =>
+          (beacon.advertisementData.localName.isNotEmpty
+              ? beacon.advertisementData.localName
+              : beacon.device.name) ==
+          name,
+    )) {
+      beaconsDelim.add(result);
+    }
   }
 
   Future<void> _checkPermissionsAndBluetooth() async {
@@ -183,9 +298,10 @@ class CasetaViewModel {
         estadoConexion = 'Sin conexión';
         colorEstado = Colors.black;
         beaconsDelim.clear();
+        beaconPrincipal = null;
+        bleObjetivo = null;
         estadoBLE = "Bluetooth apagado";
       } else {
-        // Cuando el Bluetooth se enciende, iniciar el escaneo continuo
         _startContinuousScan();
         estadoBLE = "Bluetooth activado, escaneando...";
       }
@@ -202,25 +318,22 @@ class CasetaViewModel {
   }
 
   void _startContinuousScan() {
-    // Si ya estamos escaneando, no hacer nada
     if (isScanning) return;
 
-    // Iniciar escaneo continuo (sin timeout)
+    FlutterBluePlus.stopScan();
     FlutterBluePlus.startScan(
       androidScanMode: AndroidScanMode.lowLatency,
       oneByOne: false,
-      // Sin timeout para escaneo continuo
     );
     isScanning = true;
 
-    // Cancelar si había una suscripción previa
     scanSubscription?.cancel();
 
     scanSubscription = FlutterBluePlus.scanResults.listen(
       (results) {
         final now = DateTime.now();
 
-        final detectedNow = results.where((result) {
+        final detectedBeacons = results.where((result) {
           final name = result.advertisementData.localName.isNotEmpty
               ? result.advertisementData.localName
               : result.device.name;
@@ -230,47 +343,25 @@ class CasetaViewModel {
               result.rssi <= -1;
         }).toList();
 
-        for (var beacon in detectedNow) {
+        for (var beacon in detectedBeacons) {
           _onBeaconDetected(beacon);
-        }
-
-        final activeBeacons = results.where((result) {
-          final name = result.advertisementData.localName.isNotEmpty
-              ? result.advertisementData.localName
-              : result.device.name;
-          final lastSeen = beaconLastSeen[name];
-          return lastSeen != null && now.difference(lastSeen).inSeconds < 5;
-        }).toList();
-
-        beaconsDelim = activeBeacons;
-
-        // Lógica: Conectar automáticamente cuando hay suficientes beacons (2 o más)
-        if (beaconsDelim.length >= 2 &&
-            dispositivoBLE == null &&
-            !isConnecting &&
-            !_reconexionPendiente &&
-            _bluetoothOn) {
-          _reconexionPendiente = true;
-          estadoBLE = "Múltiples beacons detectados, conectando...";
-          notifyStateChanged();
-
-          _reconexionTimer = Timer(Duration(seconds: 2), () {
-            _reconexionPendiente = false;
-            _conectarAutomaticamente();
-          });
         }
 
         if (!_bluetoothOn) {
           estadoConexion = 'Sin conexión';
           colorEstado = Colors.black;
         } else if (dispositivoBLE != null) {
-          estadoConexion = 'Conectado a BLE_URBANI';
+          estadoConexion = 'Conectado a $bleObjetivo';
           colorEstado = Colors.green;
-        } else if (beaconsDelim.isNotEmpty) {
-          estadoConexion = 'Beacons activos: ${beaconsDelim.length}';
+        } else if (beaconPrincipal != null) {
+          final rssi = beaconRssiValues[beaconPrincipal];
+          estadoConexion = 'Beacon más cercano: $beaconPrincipal (${rssi}dBm)';
           colorEstado = Colors.blue;
+        } else if (beaconRssiValues.isNotEmpty) {
+          estadoConexion = 'Beacons detectados: ${beaconRssiValues.length}';
+          colorEstado = Colors.orange;
         } else {
-          estadoConexion = 'Fuera de línea';
+          estadoConexion = 'Escaneando beacons...';
           colorEstado = Colors.orange;
         }
 
@@ -279,9 +370,9 @@ class CasetaViewModel {
       onError: (error) {
         estadoBLE = "Error en escaneo: ${error.toString()}";
         notifyStateChanged();
-        // En caso de error, intentar reiniciar el escaneo después de un breve delay
         Future.delayed(Duration(seconds: 2), () {
-          if (_bluetoothOn && !isScanning) {
+          if (_bluetoothOn) {
+            isScanning = false;
             _startContinuousScan();
           }
         });
@@ -289,96 +380,19 @@ class CasetaViewModel {
     );
   }
 
-  // función para la conexión automática
-  Future<void> _conectarAutomaticamente() async {
-    // Verificar que todavía hay al menos 2 beacons antes de conectar
-    if (beaconsDelim.length < 2) {
-      estadoBLE =
-          "Beacons insuficientes para conectar (${beaconsDelim.length})";
-      isConnecting = false;
-      notifyStateChanged();
-      return;
-    }
+  // Método para enviar datos automáticamente al conectar
+  Future<void> _enviarDatosAutomaticamente() async {
+    if (dispositivoBLE == null) return;
 
-    if (isConnecting || dispositivoBLE != null) {
-      return; // ya estoy conectado o intentando conectar
-    }
-
-    isConnecting = true;
-    estadoBLE = "Conectando a BLE_URBANI...";
-    notifyStateChanged();
+    // Pequeña pausa para asegurar que la conexión esté estable
+    await Future.delayed(Duration(milliseconds: 1000));
 
     try {
-      // Buscar dispositivo BLE_URBANI en los resultados actuales del escaneo
-      final List<ScanResult> currentResults =
-          await FlutterBluePlus.scanResults.first;
+      // 📤 ENVIAR DATOS AL CONECTAR (esto activará el ESP32 para que responda con tarifa)
+      final datos = 'USER_123;CARRO'; // Datos fijos como especificaste
+      final bytes = datos.codeUnits;
 
-      final dispositivos = currentResults.where((device) {
-        final name = device.advertisementData.localName.isNotEmpty
-            ? device.advertisementData.localName
-            : device.device.name;
-        return name == "BLE_URBANI";
-      }).toList();
-
-      if (dispositivos.isEmpty) {
-        estadoBLE = "BLE_URBANI no encontrado";
-        isConnecting = false;
-        notifyStateChanged();
-        return;
-      }
-
-      final targetDevice = dispositivos.first;
-
-      estadoBLE = "Conectando a BLE_URBANI...";
-      notifyStateChanged();
-
-      // Conectar con timeout
-      final connectionCompleter = Completer<bool>();
-      final connectionTimer = Timer(Duration(seconds: 10), () {
-        if (!connectionCompleter.isCompleted) {
-          connectionCompleter.complete(false);
-        }
-      });
-
-      final connectionSubscription = targetDevice.device.connectionState.listen(
-        (state) {
-          if (state == BluetoothConnectionState.connected &&
-              !connectionCompleter.isCompleted) {
-            connectionCompleter.complete(true);
-          }
-        },
-      );
-
-      await targetDevice.device.connect(autoConnect: false);
-
-      final connected = await connectionCompleter.future;
-      connectionTimer.cancel();
-      connectionSubscription.cancel();
-
-      if (!connected) {
-        throw TimeoutException("Timeout de conexión a BLE_URBANI");
-      }
-
-      targetDevice.device.connectionState.listen((state) {
-        if (state == BluetoothConnectionState.disconnected) {
-          estadoBLE = "🔌 Desconectado, validando beacons...";
-          dispositivoBLE = null;
-          isConnecting = false;
-
-          notifyStateChanged();
-
-          // Esperar y validar beacons antes de reconectar
-          Future.delayed(Duration(seconds: 3), () {
-            if (_bluetoothOn &&
-                dispositivoBLE == null &&
-                beaconsDelim.length >= 2) {
-              _conectarAutomaticamente();
-            }
-          });
-        }
-      });
-
-      final servicios = await targetDevice.device.discoverServices();
+      final servicios = await dispositivoBLE!.discoverServices();
       final servicio = servicios.firstWhere(
         (s) => s.uuid == Guid(serviceUUID),
         orElse: () => throw Exception("Servicio no encontrado"),
@@ -389,49 +403,119 @@ class CasetaViewModel {
         orElse: () => throw Exception("Característica no encontrada"),
       );
 
-      await caracteristica.setNotifyValue(true);
-      mensajesSubscription = caracteristica.onValueReceived.listen((value) {
-        final mensaje = String.fromCharCodes(value);
-        mensajesBLE.add(mensaje);
-        if (mensajesBLE.length > 10) mensajesBLE.removeAt(0);
-        notifyStateChanged();
-      });
-
-      dispositivoBLE = targetDevice.device;
-      estadoBLE = "✅ Conectado automáticamente a BLE_URBANI";
-      estadoConexion = 'Conectado (${beaconsDelim.length} beacons)';
-      colorEstado = Colors.green;
-      notifyStateChanged();
+      await caracteristica.write(bytes, withoutResponse: false);
+      mensajesBLE.add('Datos enviados al ESP32: $datos');
+      mensajesBLE.add('Esperando tarifa...');
     } catch (e) {
-      estadoBLE = "❌ Error en conexión automática: ${e.toString()}";
-      isConnecting = false;
+      mensajesBLE.add('Error al enviar datos automáticamente: ${e.toString()}');
       notifyStateChanged();
     }
   }
 
+  Future<void> _conectarAutomaticamente() async {
+    if (dispositivoBLE != null ||
+        beaconPrincipal == null ||
+        bleObjetivo == null ||
+        isConnecting) {
+      return;
+    }
+
+    isConnecting = true;
+    estadoBLE = "Conectando a $bleObjetivo...";
+    notifyStateChanged();
+
+    try {
+      final List<ScanResult> currentResults =
+          await FlutterBluePlus.scanResults.first;
+
+      final targetDevices = currentResults.where((device) {
+        final name = device.advertisementData.localName.isNotEmpty
+            ? device.advertisementData.localName
+            : device.device.name;
+        return name == bleObjetivo;
+      }).toList();
+
+      if (targetDevices.isEmpty) {
+        throw Exception("Dispositivo $bleObjetivo no encontrado");
+      }
+
+      final targetDevice = targetDevices.first.device;
+
+      await targetDevice
+          .connect(autoConnect: false)
+          .timeout(Duration(seconds: 10));
+
+      targetDevice.connectionState.listen((state) {
+        if (state == BluetoothConnectionState.disconnected) {
+          estadoBLE = "Desconectado de $bleObjetivo";
+          dispositivoBLE = null;
+          isConnecting = false;
+          beaconPrincipal = null;
+          bleObjetivo = null;
+          lastBestRssi = null;
+          notifyStateChanged();
+        }
+      });
+
+      final servicios = await targetDevice.discoverServices();
+      final servicio = servicios.firstWhere(
+        (s) => s.uuid == Guid(serviceUUID),
+        orElse: () => throw Exception("Servicio no encontrado"),
+      );
+
+      final caracteristica = servicio.characteristics.firstWhere(
+        (c) => c.uuid == Guid(characteristicUUID),
+        orElse: () => throw Exception("Característica no encontrada"),
+      );
+
+      // ✅ CONFIGURAR NOTIFICACIONES PARA RECIBIR RESPUESTAS
+      await _configurarNotificacionesBLE(caracteristica);
+
+      dispositivoBLE = targetDevice;
+      estadoBLE = "✅ Conectado a $bleObjetivo";
+      estadoConexion = 'Conectado a $bleObjetivo';
+      colorEstado = Colors.green;
+      mensajesBLE.add('Conectado al ESP32. Listo para operar.');
+
+      notifyStateChanged();
+
+      // 🎯 ENVIAR DATOS AUTOMÁTICAMENTE AL CONECTAR
+      // Esto hará que el ESP32 responda con la tarifa
+      await _enviarDatosAutomaticamente();
+    } catch (e) {
+      estadoBLE = "❌ Error conectando a $bleObjetivo: ${e.toString()}";
+      isConnecting = false;
+      notifyStateChanged();
+    } finally {
+      isConnecting = false;
+    }
+  }
+
   void detenerConexionBLE() {
-    // Cancelar cualquier reconexión pendiente
     _reconexionTimer?.cancel();
     _reconexionPendiente = false;
 
-    // Cancelar la suscripción a mensajes BLE
     mensajesSubscription?.cancel();
     mensajesSubscription = null;
     caracteristicaNotificaciones = null;
 
-    // Desconectar el dispositivo
     dispositivoBLE?.disconnect();
     dispositivoBLE = null;
 
-    // Actualizar estado
-    estadoBLE = "Desconectado de BLE_URBANI";
-    estadoConexion = 'Fuera de línea después de desconectar';
+    // LIMPIAR TARIFA AL DESCONECTAR
+    tarifaCalculada = null;
+    errorMensaje = null;
+
+    beaconPrincipal = null;
+    bleObjetivo = null;
+    lastBestRssi = null;
+
+    estadoBLE = "Desconectado";
+    estadoConexion = 'Fuera de línea';
     colorEstado = Colors.orange;
 
-    // Notificar cambios
     notifyStateChanged();
-
-    // No reiniciamos el escaneo, se mantiene activo continuamente
+    onDisconnected?.call(null);
   }
 
   Color getSignalColor(int rssi) {
@@ -449,11 +533,4 @@ class CasetaViewModel {
     FlutterBluePlus.stopScan();
     mensajesSubscription?.cancel();
   }
-}
-
-class TimeoutException implements Exception {
-  final String message;
-  TimeoutException(this.message);
-  @override
-  String toString() => message;
 }

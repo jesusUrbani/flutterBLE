@@ -11,8 +11,8 @@ const char* ssid = "Steren COM-852";
 const char* password = "12345678";
 
 // Configuración API - DEFINIR ESTOS VALORES SEGÚN TU CASETA
-const int TOLL_ID = 1;  // ID de la caseta (debe coincidir con la BD)
-const String ID_DISPOSITIVO = "BLE_CASETA1"; // ID del dispositivo (debe coincidir con la BD)
+const int TOLL_ID = 2;  // ID de la caseta (debe coincidir con la BD)
+const String ID_DISPOSITIVO = "BLE_CASETA2"; // ID del dispositivo (debe coincidir con la BD)
 
 // URLs de la API
 const String API_BASE = "http://192.168.0.250:3000";
@@ -246,7 +246,7 @@ void setup() {
   connectToWiFi();
 
   // Inicializar BLE
-  BLEDevice::init("BLE_A");
+  BLEDevice::init("BLE_B");
   BLEServer* pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
 

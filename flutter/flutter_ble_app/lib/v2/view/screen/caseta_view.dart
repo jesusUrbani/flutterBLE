@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import '../widget/beacon_widget.dart';
 import '../viewmodel/caseta_model.dart';
 
@@ -13,12 +12,17 @@ class CasetaPage extends StatefulWidget {
 
 class _CasetaPageState extends State<CasetaPage> {
   late CasetaViewModel _viewModel;
-  final double montoPago = 10.0; // Monto fijo para el pago
+  int _refreshKey = 0;
 
   @override
   void initState() {
     super.initState();
-    _viewModel = CasetaViewModel(onStateChanged: (_) => setState(() {}));
+    _viewModel = CasetaViewModel(
+      onStateChanged: (_) => setState(() {}),
+      onDisconnected: (_) => setState(() {
+        _refreshKey++;
+      }),
+    );
     _viewModel.init();
   }
 
@@ -65,6 +69,35 @@ class _CasetaPageState extends State<CasetaPage> {
               ),
             ),
             SizedBox(height: 20),
+
+            // Mostrar tarifa calculada si existe
+            if (_viewModel.tarifaCalculada != null) ...[
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.green[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.green),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.attach_money, color: Colors.green),
+                    SizedBox(width: 8),
+                    Text(
+                      'Tarifa: \$${_viewModel.tarifaCalculada!.toStringAsFixed(2)}',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.green[800],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: 10),
+            ],
+
             Text(
               _viewModel.estadoConexion,
               style: TextStyle(
@@ -79,14 +112,13 @@ class _CasetaPageState extends State<CasetaPage> {
               style: TextStyle(fontSize: 18, color: Colors.purple),
             ),
             SizedBox(height: 20),
-            // Botón para iniciar el escaneo de ble
+
             if (_viewModel.beaconsDelim.length >= 2 &&
                 _viewModel.dispositivoBLE == null)
-              Container(), // Ya no mostramos el botón de conexión manual
+              Container(),
 
             SizedBox(height: 10),
 
-            // Botones cuando está conectado
             if (_viewModel.dispositivoBLE != null) ...[
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -102,19 +134,34 @@ class _CasetaPageState extends State<CasetaPage> {
                     ),
                     child: Text('Desconectar', style: TextStyle(fontSize: 16)),
                   ),
+
+                  // BOTÓN DE PAGO ACTUALIZADO
                   ElevatedButton(
                     onPressed: () {
-                      _viewModel.realizarPago(montoPago);
+                      if (_viewModel.tarifaCalculada != null) {
+                        _viewModel.realizarPago(_viewModel.tarifaCalculada!);
+                      } else {
+                        // Si no hay tarifa, usar un valor por defecto o mostrar error
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('Esperando tarifa del ESP32...'),
+                          ),
+                        );
+                      }
                     },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
+                      backgroundColor: _viewModel.tarifaCalculada != null
+                          ? Colors.green
+                          : Colors.grey,
                       padding: EdgeInsets.symmetric(
-                        horizontal: 30,
+                        horizontal: 20,
                         vertical: 15,
                       ),
                     ),
                     child: Text(
-                      'Pagar \$${montoPago.toStringAsFixed(2)}',
+                      _viewModel.tarifaCalculada != null
+                          ? 'Pagar \$${_viewModel.tarifaCalculada!.toStringAsFixed(2)}'
+                          : 'Esperando tarifa...',
                       style: TextStyle(fontSize: 16, color: Colors.white),
                     ),
                   ),
@@ -122,16 +169,39 @@ class _CasetaPageState extends State<CasetaPage> {
               ),
             ],
             SizedBox(height: 20),
+
+            // Mensaje de error si existe
+            if (_viewModel.errorMensaje != null) ...[
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.red[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.error, color: Colors.red),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _viewModel.errorMensaje!,
+                        style: TextStyle(color: Colors.red[800]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: 10),
+            ],
+
             if (_viewModel.dispositivoBLE != null) ...[
               Text(
                 'Mensajes BLE:',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
               Expanded(
-                child: MensajesBLEWidget(
-                  // Usamos el widget de mensajes
-                  mensajes: _viewModel.mensajesBLE,
-                ),
+                child: MensajesBLEWidget(mensajes: _viewModel.mensajesBLE),
               ),
             ],
             Text(
@@ -141,7 +211,6 @@ class _CasetaPageState extends State<CasetaPage> {
             SizedBox(height: 10),
             Expanded(
               child: BeaconListWidget(
-                // Usamos el widget de beacons
                 beacons: _viewModel.beaconsDelim,
                 getSignalColor: _viewModel.getSignalColor,
               ),
